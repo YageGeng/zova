@@ -6564,20 +6564,15 @@ dependencies = [
 name = "zova-wasm"
 version = "0.1.0"
 dependencies = [
- "burn 0.21.0 (git+https://github.com/tracel-ai/burn.git)",
- "burn-onnx",
- "burn-store 0.21.0 (git+https://github.com/tracel-ai/burn.git)",
  "console_error_panic_hook",
- "getrandom 0.4.1",
  "js-sys",
  "log",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "wasm-logger",
- "web-time",
+ "web-sys",
 ]
 
 [[package]]

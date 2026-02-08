@@ -1,10 +1,3 @@
-#![cfg_attr(not(test), no_std)]
-#![recursion_limit = "135"]
-
-pub mod model;
-
-extern crate alloc;
-
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -30,12 +23,14 @@ pub struct BlockResult {
     pub text: Option<String>,
 }
 
-/// Process PDF bytes and return layout analysis
+/// Process PDF bytes and return layout analysis (stub)
 #[wasm_bindgen]
 pub fn process_pdf(pdf_bytes: &[u8]) -> Result<String, String> {
-    // TODO: Implement actual PDF processing
-    // For now, return stub result
+    console_error_panic_hook::set_once();
     
+    log::info!("Processing PDF with {} bytes", pdf_bytes.len());
+    
+    // Stub implementation - returns dummy result
     let result = PdfResult {
         pages: vec![PageResult {
             page_num: 0,
@@ -52,7 +47,7 @@ pub fn process_pdf(pdf_bytes: &[u8]) -> Result<String, String> {
                     id: "p0-b1".to_string(),
                     bbox: [50.0, 120.0, 545.0, 300.0],
                     class: "Text".to_string(),
-                    text: Some("Sample text content".to_string()),
+                    text: Some("Sample text content from WASM!".to_string()),
                 },
             ],
         }],
