@@ -1,0 +1,5 @@
+[workspace]
+members = ["crates/*"]
+
+# Keep dependency resolution consistent across members.
+resolver = "2"
