@@ -1,0 +1,20 @@
+[package]
+name = "layout"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+burn = { version = "0.16", default-features = false, features = ["std", "autodiff"] }
+burn-import = "0.16"
+image = "0.25"
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+burn-import = "0.16"
+
+[features]
+default = ["ndarray"]
+ndarray = ["burn/ndarray"]
+wgpu = ["burn/wgpu"]
+wasm = ["burn/candle"]
