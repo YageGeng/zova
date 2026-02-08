@@ -2629,6 +2629,7 @@ name = "pdf"
 version = "0.1.0"
 dependencies = [
  "hayro-interpret",
+ "image",
  "kurbo",
 ]
 

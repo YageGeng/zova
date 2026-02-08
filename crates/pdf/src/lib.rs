@@ -1,13 +1,16 @@
-//! PDF text extraction utilities.
+//! PDF text extraction and rendering utilities.
 //!
-//! This crate is intentionally small: it focuses on *capturing glyph events* from a PDF
-//! interpreter (e.g. `hayro-interpret`) and converting them into a character stream.
+//! This crate provides:
+//! - Text extraction via `TextExtractDevice`
+//! - PDF rendering via `PageRenderer`
 //!
 //! Notes:
 //! - PDF text is not guaranteed to have a reliable Unicode mapping. `Glyph::as_unicode()` is
 //!   best-effort and may return `None`.
 //! - For layout reconstruction (words/lines/reading order), prefer keeping the per-glyph bbox
 //!   and transforms instead of committing early to a `String`.
+
+pub mod render;
 
 use hayro_interpret::font::Glyph;
 use hayro_interpret::{

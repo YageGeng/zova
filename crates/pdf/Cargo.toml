@@ -6,3 +6,4 @@ version = "0.1.0"
 [dependencies]
 hayro-interpret = "0.5"
 kurbo = "0.12"
+image = "0.25"
