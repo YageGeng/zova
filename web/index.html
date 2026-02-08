@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Layout Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .upload-section {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        
+        .drop-zone {
+            border: 3px dashed #ddd;
+            border-radius: 8px;
+            padding: 60px 40px;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        
+        .drop-zone:hover {
+            border-color: #4CAF50;
+            background: #f9f9f9;
+        }
+        
+        .drop-zone.dragover {
+            border-color: #4CAF50;
+            background: #e8f5e9;
+        }
+        
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        
+        .btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        
+        .btn:hover {
+            background: #45a049;
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        #fileInput {
+            display: none;
+        }
+        
+        .results-section {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            display: none;
+        }
+        
+        .results-section.active {
+            display: block;
+        }
+        
+        .pdf-viewer {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .page-container {
+            flex: 1;
+            position: relative;
+            background: #f0f0f0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .page-canvas {
+            width: 100%;
+            display: block;
+        }
+        
+        .layout-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        
+        .layout-box {
+            position: absolute;
+            border: 2px solid;
+            pointer-events: auto;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        
+        .layout-box:hover {
+            opacity: 0.8;
+        }
+        
+        .layout-box.text { border-color: #2196F3; background: rgba(33, 150, 243, 0.1); }
+        .layout-box.title { border-color: #FF9800; background: rgba(255, 152, 0, 0.1); }
+        .layout-box.image { border-color: #9C27B0; background: rgba(156, 39, 176, 0.1); }
+        .layout-box.table { border-color: #4CAF50; background: rgba(76, 175, 80, 0.1); }
+        
+        .sidebar {
+            width: 300px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        
+        .sidebar h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .block-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .block-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            background: white;
+            border-radius: 6px;
+            border-left: 4px solid #ddd;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .block-item:hover {
+            background: #f0f0f0;
+        }
+        
+        .block-item.text { border-left-color: #2196F3; }
+        .block-item.title { border-left-color: #FF9800; }
+        .block-item.image { border-left-color: #9C27B0; }
+        .block-item.table { border-left-color: #4CAF50; }
+        
+        .status {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .export-btn {
+            margin-top: 20px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📄 PDF Layout Analyzer</h1>
+        
+        <div class="upload-section">
+            <div class="drop-zone" id="dropZone">
+                <div class="upload-icon">📁</div>
+                <h3>拖放 PDF 文件到这里</h3>
+                <p>或点击选择文件</p>
+                <br>
+                <button class="btn" onclick="document.getElementById('fileInput').click()">
+                    选择 PDF
+                </button>
+                <input type="file" id="fileInput" accept=".pdf">
+            </div>
+            
+            <div class="status" id="status"></div>
+        </div>
+        
+        <div class="results-section" id="results">
+            <h2>分析结果</h2>
+            
+            <div class="pdf-viewer">
+                <div class="page-container" id="pageContainer">
+                    <canvas id="pdfCanvas" class="page-canvas"></canvas>
+                    <div id="layoutOverlay" class="layout-overlay"></div>
+                </div>
+                
+                <div class="sidebar">
+                    <h3>检测到的区块</h3>
+                    <div class="block-list" id="blockList"></div>
+                    <button class="btn export-btn" onclick="exportJSON()">
+                        导出 JSON
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
