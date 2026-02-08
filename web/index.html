@@ -243,6 +243,14 @@
         </div>
     </div>
 
-    <script type="module" src="app.js"></script>
+    <script type="module">
+        import init from './pkg/zova_wasm.js';
+        await init();
+        // Load app.js after WASM is ready
+        const script = document.createElement('script');
+        script.type = 'module';
+        script.src = 'app.js';
+        document.body.appendChild(script);
+    </script>
 </body>
 </html>

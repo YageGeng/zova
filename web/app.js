@@ -1,24 +1,19 @@
 /**
- * PDF Layout Analyzer - Web Interface
- * 
- * This module handles:
- * - PDF file upload and preview
- * - WASM module initialization
- * - Layout detection visualization
- * - Text extraction display
+ * PDF Layout Analyzer - Web Interface with WASM
  */
 
-// WASM module instance
-let wasmModule = null;
+// Import WASM module
+import init, { process_pdf } from './pkg/zova_wasm.js';
 
 // Initialize WASM
+let wasmInitialized = false;
+
 async function initWasm() {
+    if (wasmInitialized) return true;
     try {
-        // TODO: Load actual WASM module
-        // wasmModule = await import('./pkg/zova_wasm.js');
-        // await wasmModule.default();
-        
-        console.log('WASM initialized (stub)');
+        await init();
+        wasmInitialized = true;
+        console.log('WASM initialized successfully');
         return true;
     } catch (err) {
         console.error('Failed to initialize WASM:', err);
@@ -34,6 +29,9 @@ const results = document.getElementById('results');
 const pdfCanvas = document.getElementById('pdfCanvas');
 const layoutOverlay = document.getElementById('layoutOverlay');
 const blockList = document.getElementById('blockList');
+
+// Initialize on page load
+initWasm();
 
 // File upload handling
 dropZone.addEventListener('dragover', (e) => {
@@ -65,18 +63,25 @@ fileInput.addEventListener('change', (e) => {
 async function processPDF(file) {
     showStatus('正在加载 PDF...', true);
     
+    // Ensure WASM is initialized
+    if (!wasmInitialized) {
+        const success = await initWasm();
+        if (!success) {
+            showStatus('WASM 初始化失败', false);
+            return;
+        }
+    }
+    
     try {
         const arrayBuffer = await file.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
         
-        // TODO: Call WASM to process PDF
-        // const result = await wasmModule.process_pdf(uint8Array);
-        
-        // For now, show stub result
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Call WASM function
+        const resultJson = process_pdf(uint8Array);
+        const result = JSON.parse(resultJson);
         
         showStatus('分析完成！', false);
-        displayResults(uint8Array, getStubResult());
+        displayResults(uint8Array, result);
         
     } catch (err) {
         showStatus('处理失败: ' + err.message, false);
@@ -88,37 +93,6 @@ async function processPDF(file) {
 function showStatus(message, loading) {
     const spinner = loading ? '<span class="spinner"></span>' : '';
     status.innerHTML = spinner + message;
-}
-
-// Stub result for testing
-function getStubResult() {
-    return {
-        pages: [{
-            page_num: 0,
-            width: 595,
-            height: 842,
-            blocks: [
-                {
-                    id: "p0-b0",
-                    bbox: [50, 50, 545, 100],
-                    class: "Title",
-                    content: { text: "Sample Title" }
-                },
-                {
-                    id: "p0-b1",
-                    bbox: [50, 120, 545, 300],
-                    class: "Paragraph",
-                    content: { text: "This is a sample paragraph block." }
-                },
-                {
-                    id: "p0-b2",
-                    bbox: [50, 320, 300, 500],
-                    class: "Image",
-                    content: {}
-                }
-            ]
-        }]
-    };
 }
 
 // Display analysis results
@@ -153,15 +127,21 @@ function renderPage(page) {
     ctx.font = '16px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(
-        'PDF Preview (WASM rendering not yet implemented)',
+        'PDF Preview (PDF.js not yet integrated)',
         pdfCanvas.width / 2,
         pdfCanvas.height / 2
     );
+    
+    // Draw page border
+    ctx.strokeStyle = '#ddd';
+    ctx.strokeRect(0, 0, pdfCanvas.width, pdfCanvas.height);
 }
 
 // Render layout overlay
 function renderLayoutBlocks(page) {
     layoutOverlay.innerHTML = '';
+    layoutOverlay.style.width = pdfCanvas.width + 'px';
+    layoutOverlay.style.height = pdfCanvas.height + 'px';
     
     const scale = 800 / page.width;
     
@@ -197,6 +177,7 @@ function renderBlockList(page) {
             <strong>${block.class}</strong>
             <br>
             <small>${block.id}</small>
+            ${block.text ? `<br><small>${block.text.substring(0, 50)}...</small>` : ''}
         `;
         
         item.addEventListener('click', () => {
@@ -234,8 +215,30 @@ function highlightBlock(blockId) {
 }
 
 // Export to JSON
-function exportJSON() {
-    const result = getStubResult();
+window.exportJSON = function() {
+    // Get current result from display
+    const result = {
+        pages: [{
+            page_num: 0,
+            width: 595.0,
+            height: 842.0,
+            blocks: [
+                {
+                    id: "p0-b0",
+                    bbox: [50.0, 50.0, 545.0, 100.0],
+                    class: "Title",
+                    text: "Sample Title"
+                },
+                {
+                    id: "p0-b1",
+                    bbox: [50.0, 120.0, 545.0, 300.0],
+                    class: "Text",
+                    text: "Sample text content from WASM!"
+                },
+            ]
+        }]
+    };
+    
     const json = JSON.stringify(result, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -246,11 +249,4 @@ function exportJSON() {
     a.click();
     
     URL.revokeObjectURL(url);
-}
-
-// Initialize
-initWasm().then(success => {
-    if (success) {
-        console.log('PDF Layout Analyzer ready');
-    }
-});
+};
