@@ -1,24 +1,38 @@
-use burn_import::onnx::ModelGen;
-use std::path::PathBuf;
+// Stub build.rs - burn-import cannot handle this model's dynamic shapes
+// Using stub implementation until burn-import supports Shape/Gather/Range ops
 
 fn main() {
-    // 使用最终的静态模型
-    let model_path = "../../models/doclayout_final.onnx";
+    println!("cargo:warning=Using stub model - burn-import cannot handle dynamic shapes");
     
-    // 检查模型是否存在
-    if !PathBuf::from(model_path).exists() {
-        panic!("Model not found: {}", model_path);
+    // 创建 stub 模型代码
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let stub_code = r#"
+use burn::prelude::*;
+
+/// Stub DocLayout model
+#[derive(Module, Debug)]
+pub struct Model<B: Backend> {
+    phantom: std::marker::PhantomData<B>,
+}
+
+impl<B: Backend> Model<B> {
+    /// Create new model instance
+    pub fn new(_device: &B::Device) -> Self {
+        Self {
+            phantom: std::marker::PhantomData,
+        }
     }
     
-    println!("cargo:rerun-if-changed={}", model_path);
+    /// Forward pass - returns dummy output
+    pub fn forward(&self, input: Tensor<B, 4>) -> Tensor<B, 3> {
+        // TODO: Replace with actual YOLO implementation
+        // For now, return dummy output [1, 300, 6]
+        let device = input.device();
+        Tensor::zeros([1, 300, 6], &device)
+    }
+}
+"#;
     
-    // 尝试使用 burn-import 生成模型代码
-    // 注意：模型包含动态形状操作（Shape/Gather/Range），
-    // burn-import 0.16 可能无法处理
-    ModelGen::new()
-        .input(model_path)
-        .out_dir("model")
-        .run_from_script();
-    
-    println!("cargo:warning=Model code generation completed");
+    std::fs::write(format!("{}/model.rs", out_dir), stub_code)
+        .expect("Failed to write stub model");
 }
