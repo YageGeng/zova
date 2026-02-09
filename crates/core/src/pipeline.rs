@@ -45,6 +45,7 @@ impl<B: Backend> ProcessingPipeline<B> {
             // 构建 blocks
             let mut blocks = Vec::new();
             for (idx, region) in regions.iter().enumerate() {
+                let bbox = region.bbox.to_pdf_coords(width as f32, height as f32);
                 let block = Block {
                     id: format!("p{}-b{}", page_idx, idx),
                     region: region.clone(),
@@ -52,7 +53,7 @@ impl<B: Backend> ProcessingPipeline<B> {
                         text: String::new(),
                         font_info: None,
                     }),
-                    bbox: region.bbox.to_pdf_coords(width as f32, height as f32),
+                    bbox,
                 };
                 blocks.push(block);
             }
