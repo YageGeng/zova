@@ -5,10 +5,23 @@ edition = "2024"
 build = "build.rs"
 
 [dependencies]
-burn = { git = "https://github.com/tracel-ai/burn.git", default-features = false, features = ["std", "ndarray"] }
-burn-store = { git = "https://github.com/tracel-ai/burn.git", features = ["std", "burnpack"] }
+burn = { workspace = true, features = ["ndarray", "webgpu"] }
+burn-store = { workspace = true, features = ["std", "burnpack"] }
+
 image = "0.25"
 serde = { version = "1", features = ["derive"] }
 
+# Wasm dependencies
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde-wasm-bindgen = "0.6"
+wasm-logger = "0.2"
+web-time = "1.1.0"
+js-sys = "0.3"
+# https://github.com/rust-random/getrandom/#webassembly-support
+getrandom = { version = "0.3.4", default-features = false, features = [
+    "wasm_js",
+] }
+
 [build-dependencies]
-burn-onnx = { git = "https://github.com/tracel-ai/burn-onnx.git" }
+burn-onnx = { git = "https://github.com/tracel-ai/burn-onnx.git", branch = "main", default-features = false }

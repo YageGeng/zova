@@ -1,3 +1,11 @@
 [workspace]
 members = ["crates/*"]
 resolver = "2"
+
+[workspace.lints.clippy]
+
+[workspace.dependencies]
+burn = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "bd991fe52c94faef0cb52dcc92816323a053ad1c" }
+burn-ndarray = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "bd991fe52c94faef0cb52dcc92816323a053ad1c" }
+burn-store = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "bd991fe52c94faef0cb52dcc92816323a053ad1c" }
+burn-tensor = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "bd991fe52c94faef0cb52dcc92816323a053ad1c" }

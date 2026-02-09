@@ -101,8 +101,8 @@ impl TextExtractDevice {
         let mut last_emitted_was_space = false;
 
         for g in &self.chars {
-            if let (Some(prev), Some(cur)) = (last_bbox, g.bbox) {
-                if is_same_line(prev, cur, opts.same_line_overlap_ratio) {
+            if let (Some(prev), Some(cur)) = (last_bbox, g.bbox)
+                && is_same_line(prev, cur, opts.same_line_overlap_ratio) {
                     let gap = cur.x0 - prev.x1;
                     // Negative/zero gaps happen due to kerning or overlap.
                     if gap > 0.0 {
@@ -116,7 +116,6 @@ impl TextExtractDevice {
                         }
                     }
                 }
-            }
 
             if let Some(ch) = g.ch {
                 out.push(ch);
