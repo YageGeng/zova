@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Use burn 0.16
+# Use workspace burn with ndarray
 burn = { workspace = true, default-features = false, features = ["ndarray"] }
 
 serde = { workspace = true }
@@ -23,6 +23,3 @@ wasm-logger = "0.2"
 web-time = "1.1"
 js-sys = "0.3"
 getrandom = { workspace = true }
-
-[build-dependencies]
-burn-import = { version = "0.16", default-features = false }

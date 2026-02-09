@@ -1,19 +1,14 @@
 #![cfg_attr(not(test), no_std)]
 #![recursion_limit = "135"]
 
-pub mod model;
-
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::vec;
 
-use burn::backend::NdArray;
-use burn::prelude::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-
-use crate::model::doclayout::Model as DocLayoutModel;
 
 /// PDF Processing Result
 #[derive(Serialize, Deserialize)]
@@ -45,80 +40,30 @@ pub fn start() {
     log::info!("Zova WASM module initialized");
 }
 
-/// Layout analyzer using DocLayout-YOLO model
+/// Layout analyzer
 #[wasm_bindgen]
-pub struct LayoutAnalyzer {
-    model: ModelType,
-}
-
-#[allow(clippy::large_enum_variant)]
-enum ModelType {
-    WithNdArrayBackend(Model<NdArray<f32>>),
-}
+pub struct LayoutAnalyzer;
 
 #[wasm_bindgen]
 impl LayoutAnalyzer {
-    /// Create new analyzer with NdArray backend
+    /// Create new analyzer
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         log::info!("Initializing LayoutAnalyzer");
-        let device = Default::default();
-        Self {
-            model: ModelType::WithNdArrayBackend(Model::new(&device)),
-        }
+        Self
     }
 
-    /// Analyze image and return layout regions
-    pub async fn analyze(
+    /// Analyze image and return layout regions (stub)
+    pub fn analyze(
         &self,
-        image_data: Vec<f32>,
+        _image_data: Vec<f32>,
         width: usize,
         height: usize,
     ) -> Result<JsValue, JsValue> {
         log::info!("Analyzing image {}x{}", width, height);
 
-        let result = match &self.model {
-            ModelType::WithNdArrayBackend(model) => {
-                model.forward(&image_data, width, height).await
-            }
-        };
-
-        Ok(serde_wasm_bindgen::to_value(&result)?)
-    }
-}
-
-/// Layout analysis model wrapper
-pub struct Model<B: Backend> {
-    model: DocLayoutModel<B>,
-}
-
-impl<B: Backend> Model<B> {
-    /// Create model from embedded weights
-    pub fn new(device: &B::Device) -> Self {
-        Self {
-            model: DocLayoutModel::from_embedded(device),
-        }
-    }
-
-    /// Run inference on image
-    pub async fn forward(
-        &self,
-        image_data: &[f32],
-        width: usize,
-        height: usize,
-    ) -> PdfResult {
-        // Convert to tensor [1, 3, H, W]
-        let input = Tensor::<B, 1>::from_floats(image_data, &B::Device::default())
-            .reshape([1, 3, height, width]);
-
-        // Run model
-        let output = self.model.forward(input);
-
-        // Decode YOLO output (stub)
-        let _ = output;
-        
-        // Return stub result for now
-        PdfResult {
+        // Return stub result
+        let result = PdfResult {
             pages: vec![PageResult {
                 page_num: 0,
                 width: width as f32,
@@ -138,6 +83,8 @@ impl<B: Backend> Model<B> {
                     },
                 ],
             }],
-        }
+        };
+
+        Ok(serde_wasm_bindgen::to_value(&result)?)
     }
 }
