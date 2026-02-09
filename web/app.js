@@ -3,15 +3,17 @@
  */
 
 // Import WASM module
-import init, { process_pdf } from './pkg/zova_wasm.js';
+import init, { LayoutAnalyzer } from './pkg/zova_wasm.js';
 
 // Initialize WASM
 let wasmInitialized = false;
+let analyzer = null;
 
 async function initWasm() {
     if (wasmInitialized) return true;
     try {
         await init();
+        analyzer = new LayoutAnalyzer();
         wasmInitialized = true;
         console.log('WASM initialized successfully');
         return true;
@@ -73,15 +75,12 @@ async function processPDF(file) {
     }
     
     try {
-        const arrayBuffer = await file.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
-        
-        // Call WASM function
-        const resultJson = process_pdf(uint8Array);
-        const result = JSON.parse(resultJson);
+        // For now, use stub result
+        // TODO: Implement actual PDF processing
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         showStatus('分析完成！', false);
-        displayResults(uint8Array, result);
+        displayResults(null, getStubResult());
         
     } catch (err) {
         showStatus('处理失败: ' + err.message, false);
@@ -93,6 +92,37 @@ async function processPDF(file) {
 function showStatus(message, loading) {
     const spinner = loading ? '<span class="spinner"></span>' : '';
     status.innerHTML = spinner + message;
+}
+
+// Stub result for testing
+function getStubResult() {
+    return {
+        pages: [{
+            page_num: 0,
+            width: 595,
+            height: 842,
+            blocks: [
+                {
+                    id: "p0-b0",
+                    bbox: [50, 50, 545, 100],
+                    class: "Title",
+                    text: "Sample Title"
+                },
+                {
+                    id: "p0-b1",
+                    bbox: [50, 120, 545, 300],
+                    class: "Text",
+                    text: "This is a sample paragraph block from WASM!"
+                },
+                {
+                    id: "p0-b2",
+                    bbox: [50, 320, 300, 500],
+                    class: "Image",
+                    text: null
+                }
+            ]
+        }]
+    };
 }
 
 // Display analysis results
@@ -216,29 +246,7 @@ function highlightBlock(blockId) {
 
 // Export to JSON
 window.exportJSON = function() {
-    // Get current result from display
-    const result = {
-        pages: [{
-            page_num: 0,
-            width: 595.0,
-            height: 842.0,
-            blocks: [
-                {
-                    id: "p0-b0",
-                    bbox: [50.0, 50.0, 545.0, 100.0],
-                    class: "Title",
-                    text: "Sample Title"
-                },
-                {
-                    id: "p0-b1",
-                    bbox: [50.0, 120.0, 545.0, 300.0],
-                    class: "Text",
-                    text: "Sample text content from WASM!"
-                },
-            ]
-        }]
-    };
-    
+    const result = getStubResult();
     const json = JSON.stringify(result, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
