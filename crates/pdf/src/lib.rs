@@ -102,20 +102,21 @@ impl TextExtractDevice {
 
         for g in &self.chars {
             if let (Some(prev), Some(cur)) = (last_bbox, g.bbox)
-                && is_same_line(prev, cur, opts.same_line_overlap_ratio) {
-                    let gap = cur.x0 - prev.x1;
-                    // Negative/zero gaps happen due to kerning or overlap.
-                    if gap > 0.0 {
-                        let avg_h = 0.5 * (prev.height() + cur.height());
-                        let threshold = opts.gap_to_height_ratio * avg_h;
+                && is_same_line(prev, cur, opts.same_line_overlap_ratio)
+            {
+                let gap = cur.x0 - prev.x1;
+                // Negative/zero gaps happen due to kerning or overlap.
+                if gap > 0.0 {
+                    let avg_h = 0.5 * (prev.height() + cur.height());
+                    let threshold = opts.gap_to_height_ratio * avg_h;
 
-                        // Avoid emitting repeated spaces.
-                        if gap > threshold && !out.is_empty() && !last_emitted_was_space {
-                            out.push(' ');
-                            last_emitted_was_space = true;
-                        }
+                    // Avoid emitting repeated spaces.
+                    if gap > threshold && !out.is_empty() && !last_emitted_was_space {
+                        out.push(' ');
+                        last_emitted_was_space = true;
                     }
                 }
+            }
 
             if let Some(ch) = g.ch {
                 out.push(ch);

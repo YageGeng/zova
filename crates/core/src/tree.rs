@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use layout::types::LayoutRegion;
+use serde::{Deserialize, Serialize};
 
 /// PDF 的完整结构化表示
 #[derive(Debug, Clone, Serialize, Deserialize)]

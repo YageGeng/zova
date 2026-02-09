@@ -22,16 +22,16 @@ impl<B: Backend> LayoutAnalyzer<B> {
             _phantom: core::marker::PhantomData,
         }
     }
-    
+
     /// 分析图片，返回版面区域列表
-    /// 
+    ///
     /// 当前为 stub 实现，返回空列表
     pub fn analyze(&self, _image: &image::DynamicImage) -> Vec<LayoutRegion> {
         // TODO: 实现实际的 YOLO 推理
         // 1. 预处理图片到 1024x1024
         // 2. 运行模型推理
         // 3. 解码 YOLO 输出（NMS）
-        
+
         Vec::new()
     }
 }
