@@ -1,0 +1,18 @@
+[package]
+name = "chat-app"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-component-assets.workspace = true
+gpui-tokio-bridge.workspace = true
+core-text.workspace = true
+rig-core.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+snafu.workspace = true

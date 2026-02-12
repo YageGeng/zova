@@ -1,1 +1,4 @@
 /target
+.chat-app
+.sisyphus
+**/target/
