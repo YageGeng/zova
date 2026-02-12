@@ -1,0 +1,8 @@
+scenario=migrate_tsv_fixture
+db_path=.sisyphus/evidence/task-6.db
+imported_sessions=3
+order_preserved=true
+initial_branch_count=3
+active_branch_links=3
+source_retained=true
+runner_ok=true

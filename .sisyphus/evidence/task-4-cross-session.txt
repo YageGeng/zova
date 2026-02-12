@@ -1,0 +1,4 @@
+scenario=cross_session_guard
+db_path=.sisyphus/evidence/task-4.db
+cross_session_guard=true
+runner_ok=true

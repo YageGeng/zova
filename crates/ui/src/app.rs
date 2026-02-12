@@ -4,8 +4,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::notification::NotificationList;
 use gpui_component::{
+    ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
-    h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable,
+    h_flex, v_flex,
 };
 
 use crate::chat::{ChatSidebar, ChatView, SidebarToggleClicked};

@@ -1,0 +1,4 @@
+scenario=agent_event_roundtrip
+db_path=.sisyphus/evidence/task-5.db
+agent_event_roundtrip=true
+runner_ok=true

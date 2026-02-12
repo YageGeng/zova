@@ -6,24 +6,24 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use snafu::{OptionExt, ResultExt};
-use sqlx::{Connection, FromRow, SqliteConnection, SqlitePool};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::{Connection, FromRow, SqliteConnection, SqlitePool};
 
 use super::error::{
-    ConflictSnafu, InvariantViolationSnafu, NotFoundSnafu, SqliteQuerySnafu, SqliteRuntimeInitSnafu,
-    SqliteThreadSpawnSnafu,
+    ConflictSnafu, InvariantViolationSnafu, NotFoundSnafu, SqliteQuerySnafu,
+    SqliteRuntimeInitSnafu, SqliteThreadSpawnSnafu,
 };
-use super::ids::{AgentEventId, BranchId, MediaRefId, MessageId, SessionId};
-use super::types::{
-    AgentEventRecord, HistoryForkOutcome, HistoryForkRequest, MediaRefRecord, MessageIdRemap,
-    MessagePatch, MessageRecord, MessageRole, NewAgentEvent, NewMediaRef, NewMessage, NewSession,
-    SessionPatch, SessionRecord, DEFAULT_SESSION_TITLE,
-};
-use super::{AgentEventStore, MediaStore, MessageStore, SessionStore};
 use super::error::{
     CreateSqliteDirectorySnafu, SqliteConnectOptionsSnafu, SqliteConnectSnafu, SqliteMigrateSnafu,
     SqlitePragmaSnafu, StorageResult,
 };
+use super::ids::{AgentEventId, BranchId, MediaRefId, MessageId, SessionId};
+use super::types::{
+    AgentEventRecord, DEFAULT_SESSION_TITLE, HistoryForkOutcome, HistoryForkRequest,
+    MediaRefRecord, MessageIdRemap, MessagePatch, MessageRecord, MessageRole, NewAgentEvent,
+    NewMediaRef, NewMessage, NewSession, SessionPatch, SessionRecord,
+};
+use super::{AgentEventStore, MediaStore, MessageStore, SessionStore};
 
 pub const LEGACY_CONVERSATIONS_TSV_RELATIVE_PATH: &str = ".zova/conversations.tsv";
 
@@ -117,8 +117,12 @@ impl SqliteStorage {
         &self.pool
     }
 
-    pub fn import_legacy_conversations_from_default_path(&self) -> StorageResult<LegacyImportReport> {
-        self.import_legacy_conversations_from_path(Path::new(LEGACY_CONVERSATIONS_TSV_RELATIVE_PATH))
+    pub fn import_legacy_conversations_from_default_path(
+        &self,
+    ) -> StorageResult<LegacyImportReport> {
+        self.import_legacy_conversations_from_path(Path::new(
+            LEGACY_CONVERSATIONS_TSV_RELATIVE_PATH,
+        ))
     }
 
     pub fn import_legacy_conversations_from_path(
@@ -357,7 +361,11 @@ impl SessionStore for SqliteStorage {
         })
     }
 
-    fn update_session(&self, session_id: SessionId, patch: SessionPatch) -> StorageResult<SessionRecord> {
+    fn update_session(
+        &self,
+        session_id: SessionId,
+        patch: SessionPatch,
+    ) -> StorageResult<SessionRecord> {
         let database_url = self.database_url.clone();
         self.run_db_call("session-update", async move {
             let mut connection = connect_store_connection(&database_url, "session-update-connect").await?;
@@ -470,7 +478,11 @@ impl SessionStore for SqliteStorage {
 }
 
 impl MessageStore for SqliteStorage {
-    fn append_message(&self, session_id: SessionId, input: NewMessage) -> StorageResult<MessageRecord> {
+    fn append_message(
+        &self,
+        session_id: SessionId,
+        input: NewMessage,
+    ) -> StorageResult<MessageRecord> {
         let database_url = self.database_url.clone();
         self.run_db_call("message-append", async move {
             let mut connection = connect_store_connection(&database_url, "message-append-connect").await?;
@@ -541,7 +553,11 @@ impl MessageStore for SqliteStorage {
         })
     }
 
-    fn get_message(&self, session_id: SessionId, message_id: MessageId) -> StorageResult<Option<MessageRecord>> {
+    fn get_message(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> StorageResult<Option<MessageRecord>> {
         let database_url = self.database_url.clone();
         self.run_db_call("message-get", async move {
             let mut connection = connect_store_connection(&database_url, "message-get-connect").await?;
@@ -1087,10 +1103,12 @@ fn session_row_to_record(row: SessionRow) -> StorageResult<SessionRecord> {
     Ok(SessionRecord {
         id: SessionId::parse(&row.id)?,
         title: row.title,
-        active_branch_id: BranchId::parse(&row.active_branch_id.context(InvariantViolationSnafu {
-            stage: "session-row-active-branch-missing",
-            details: "session row is missing active_branch_id".to_string(),
-        })?)?,
+        active_branch_id: BranchId::parse(&row.active_branch_id.context(
+            InvariantViolationSnafu {
+                stage: "session-row-active-branch-missing",
+                details: "session row is missing active_branch_id".to_string(),
+            },
+        )?)?,
         updated_at_unix_seconds: i64_to_u64(row.updated_at, "session-row-updated-at")?,
         deleted_at_unix_seconds: row
             .deleted_at
@@ -1161,12 +1179,13 @@ async fn connect_store_connection(
     database_url: &str,
     stage: &'static str,
 ) -> StorageResult<SqliteConnection> {
-    let mut connection = SqliteConnection::connect(database_url)
-        .await
-        .context(SqliteConnectSnafu {
-            stage,
-            database_url: database_url.to_string(),
-        })?;
+    let mut connection =
+        SqliteConnection::connect(database_url)
+            .await
+            .context(SqliteConnectSnafu {
+                stage,
+                database_url: database_url.to_string(),
+            })?;
 
     sqlx::query("PRAGMA foreign_keys = ON;")
         .execute(&mut connection)
@@ -1186,7 +1205,10 @@ async fn connect_store_connection(
     Ok(connection)
 }
 
-async fn session_exists(connection: &mut SqliteConnection, session_id: SessionId) -> StorageResult<bool> {
+async fn session_exists(
+    connection: &mut SqliteConnection,
+    session_id: SessionId,
+) -> StorageResult<bool> {
     let existing = sqlx::query_scalar::<_, i64>("SELECT 1 FROM sessions WHERE id = ? LIMIT 1")
         .bind(session_id.to_string())
         .fetch_optional(&mut *connection)
@@ -1353,30 +1375,30 @@ fn unix_timestamp_seconds() -> i64 {
 }
 
 fn i64_to_u64(value: i64, stage: &'static str) -> StorageResult<u64> {
-    value.try_into().map_err(|_| {
-        super::error::StorageError::InvariantViolation {
+    value
+        .try_into()
+        .map_err(|_| super::error::StorageError::InvariantViolation {
             stage,
             details: format!("negative sqlite integer '{value}' cannot map to u64"),
-        }
-    })
+        })
 }
 
 fn i64_to_u32(value: i64, stage: &'static str) -> StorageResult<u32> {
-    value.try_into().map_err(|_| {
-        super::error::StorageError::InvariantViolation {
+    value
+        .try_into()
+        .map_err(|_| super::error::StorageError::InvariantViolation {
             stage,
             details: format!("sqlite integer '{value}' cannot map to u32"),
-        }
-    })
+        })
 }
 
 fn u64_to_i64(value: u64, stage: &'static str) -> StorageResult<i64> {
-    value.try_into().map_err(|_| {
-        super::error::StorageError::InvariantViolation {
+    value
+        .try_into()
+        .map_err(|_| super::error::StorageError::InvariantViolation {
             stage,
             details: format!("u64 '{value}' cannot map to sqlite i64"),
-        }
-    })
+        })
 }
 
 fn validate_media_uri(uri: &str, stage: &'static str) -> StorageResult<()> {
@@ -1394,7 +1416,9 @@ fn validate_media_uri(uri: &str, stage: &'static str) -> StorageResult<()> {
     Ok(())
 }
 
-fn parse_legacy_conversation_rows(store: &str) -> (Vec<LegacyConversationRow>, Vec<LegacyImportWarning>) {
+fn parse_legacy_conversation_rows(
+    store: &str,
+) -> (Vec<LegacyConversationRow>, Vec<LegacyImportWarning>) {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
 
@@ -1430,7 +1454,8 @@ fn parse_legacy_conversation_row(line: &str) -> Result<LegacyConversationRow, &'
     let raw_title = fields.next().ok_or("missing-title")?;
 
     let legacy_id = parse_legacy_u64(raw_id).map_err(|_| "invalid-id")?;
-    let updated_at_unix_seconds = parse_legacy_u64(raw_updated_at).map_err(|_| "invalid-updated-at")?;
+    let updated_at_unix_seconds =
+        parse_legacy_u64(raw_updated_at).map_err(|_| "invalid-updated-at")?;
     let decoded_title = decode_legacy_title(raw_title);
 
     // Legacy create behavior defaults empty/whitespace-only titles to "New Conversation".

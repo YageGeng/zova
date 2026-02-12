@@ -1,0 +1,7 @@
+scenario=schema_init
+db_path=.sisyphus/evidence/task-2.db
+schema_ok=true
+journal_mode=wal
+foreign_keys=1
+busy_timeout=5000
+runner_ok=true

@@ -6,12 +6,12 @@ use std::str::FromStr;
 
 use snafu::{OptionExt, ResultExt, Snafu};
 
-use zova_storage::{
-    AgentEventId, AgentEventStore, BranchId, HistoryForkRequest, MediaRefId, MediaStore, MessageId,
-    MessagePatch, MessageRole, MessageStore, NewAgentEvent, NewMediaRef, NewMessage, NewSession,
-    SessionId, SessionPatch, SessionStore, SqliteStorage, StorageError, DEFAULT_SESSION_TITLE,
-};
 use zova_storage::sqlite::LEGACY_CONVERSATIONS_TSV_RELATIVE_PATH;
+use zova_storage::{
+    AgentEventId, AgentEventStore, BranchId, DEFAULT_SESSION_TITLE, HistoryForkRequest, MediaRefId,
+    MediaStore, MessageId, MessagePatch, MessageRole, MessageStore, NewAgentEvent, NewMediaRef,
+    NewMessage, NewSession, SessionId, SessionPatch, SessionStore, SqliteStorage, StorageError,
+};
 
 #[derive(Debug, Clone)]
 struct RunnerArgs {
@@ -157,7 +157,9 @@ async fn run() -> RunnerResult<()> {
         Scenario::MediaRefRoundtrip => {
             run_media_ref_roundtrip(require_db_path(&args, "media_ref_roundtrip")?).await
         }
-        Scenario::MediaBlobGuard => run_media_blob_guard(require_db_path(&args, "media_blob_guard")?).await,
+        Scenario::MediaBlobGuard => {
+            run_media_blob_guard(require_db_path(&args, "media_blob_guard")?).await
+        }
         Scenario::AgentEventRoundtrip => {
             run_agent_event_roundtrip(require_db_path(&args, "agent_event_roundtrip")?).await
         }
@@ -295,7 +297,13 @@ async fn run_schema_init(db_path: &str) -> RunnerResult<()> {
         stage: "scenario-schema-init-list-tables",
     })?;
 
-    let required_tables = ["sessions", "branches", "messages", "media_refs", "agent_events"];
+    let required_tables = [
+        "sessions",
+        "branches",
+        "messages",
+        "media_refs",
+        "agent_events",
+    ];
     let available_tables: HashSet<String> = discovered_tables.into_iter().collect();
     let schema_ok = required_tables
         .iter()
@@ -525,8 +533,9 @@ async fn run_session_crud(db_path: &str) -> RunnerResult<()> {
         return ScenarioFailedSnafu {
             stage: "scenario-session-crud-assert-order",
             scenario: "session_crud",
-            reason: "session listing order is not updated_at DESC with deterministic id DESC tie-break"
-                .to_string(),
+            reason:
+                "session listing order is not updated_at DESC with deterministic id DESC tie-break"
+                    .to_string(),
         }
         .fail();
     }
@@ -646,9 +655,7 @@ async fn run_history_branch_fork(db_path: &str) -> RunnerResult<()> {
         return ScenarioFailedSnafu {
             stage: "scenario-history-branch-fork-assert-old-branch-hidden",
             scenario: "history_branch_fork",
-            reason: format!(
-                "expected old_branch_visible_count=0, got {old_branch_visible_count}"
-            ),
+            reason: format!("expected old_branch_visible_count=0, got {old_branch_visible_count}"),
         }
         .fail();
     }
@@ -789,11 +796,12 @@ async fn run_media_ref_roundtrip(db_path: &str) -> RunnerResult<()> {
             stage: "scenario-media-roundtrip-attach",
         })?;
 
-    let listed = storage
-        .list_media(session.id, message.id, false)
-        .context(StorageValidationSnafu {
-            stage: "scenario-media-roundtrip-list-active",
-        })?;
+    let listed =
+        storage
+            .list_media(session.id, message.id, false)
+            .context(StorageValidationSnafu {
+                stage: "scenario-media-roundtrip-list-active",
+            })?;
 
     let stored_uri = listed
         .first()
@@ -810,16 +818,18 @@ async fn run_media_ref_roundtrip(db_path: &str) -> RunnerResult<()> {
         .context(StorageValidationSnafu {
             stage: "scenario-media-roundtrip-soft-delete",
         })?;
-    let active_after_delete = storage
-        .list_media(session.id, message.id, false)
-        .context(StorageValidationSnafu {
-            stage: "scenario-media-roundtrip-list-after-delete",
-        })?;
-    let with_deleted = storage
-        .list_media(session.id, message.id, true)
-        .context(StorageValidationSnafu {
-            stage: "scenario-media-roundtrip-list-with-deleted",
-        })?;
+    let active_after_delete =
+        storage
+            .list_media(session.id, message.id, false)
+            .context(StorageValidationSnafu {
+                stage: "scenario-media-roundtrip-list-after-delete",
+            })?;
+    let with_deleted =
+        storage
+            .list_media(session.id, message.id, true)
+            .context(StorageValidationSnafu {
+                stage: "scenario-media-roundtrip-list-with-deleted",
+            })?;
 
     let media_roundtrip = metadata_ok
         && active_after_delete.is_empty()
@@ -947,11 +957,12 @@ async fn run_agent_event_roundtrip(db_path: &str) -> RunnerResult<()> {
             stage: "scenario-agent-event-roundtrip-append-message-event",
         })?;
 
-    let session_events = storage
-        .list_agent_events(session.id, None)
-        .context(StorageValidationSnafu {
-            stage: "scenario-agent-event-roundtrip-list-session",
-        })?;
+    let session_events =
+        storage
+            .list_agent_events(session.id, None)
+            .context(StorageValidationSnafu {
+                stage: "scenario-agent-event-roundtrip-list-session",
+            })?;
     let message_events = storage
         .list_agent_events(session.id, Some(message.id))
         .context(StorageValidationSnafu {
@@ -1117,12 +1128,13 @@ async fn run_migrate_idempotent(db_path: &str) -> RunnerResult<()> {
         .context(StorageValidationSnafu {
             stage: "scenario-migrate-idempotent-list",
         })?;
-    let branch_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM branches WHERE deleted_at IS NULL")
-        .fetch_one(storage.pool())
-        .await
-        .context(SqliteQuerySnafu {
-            stage: "scenario-migrate-idempotent-count-branches",
-        })?;
+    let branch_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM branches WHERE deleted_at IS NULL")
+            .fetch_one(storage.pool())
+            .await
+            .context(SqliteQuerySnafu {
+                stage: "scenario-migrate-idempotent-count-branches",
+            })?;
 
     let idempotent = first_import.imported_sessions == 3
         && second_import.imported_sessions == 0
@@ -1131,7 +1143,10 @@ async fn run_migrate_idempotent(db_path: &str) -> RunnerResult<()> {
         && branch_count == 3;
 
     println!("first_imported_sessions={}", first_import.imported_sessions);
-    println!("second_imported_sessions={}", second_import.imported_sessions);
+    println!(
+        "second_imported_sessions={}",
+        second_import.imported_sessions
+    );
     println!("already_migrated={}", second_import.already_migrated);
     println!("idempotent={idempotent}");
 

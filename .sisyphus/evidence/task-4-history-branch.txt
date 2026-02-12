@@ -1,0 +1,8 @@
+scenario=history_branch_fork
+db_path=.sisyphus/evidence/task-4.db
+fork_created=true
+active_branch_visible_count=2
+old_branch_visible_count=0
+remap_deterministic=true
+replacement_ok=true
+runner_ok=true

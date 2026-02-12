@@ -1,0 +1,5 @@
+$ cargo check -p zova
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+
+$ cargo clippy -p zova --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s

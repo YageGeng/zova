@@ -5,12 +5,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::*;
 use gpui_component::{
+    ActiveTheme, Icon, IconName, Sizable, VirtualListScrollHandle,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
     label::Label,
     list::ListItem,
-    v_flex, v_virtual_list, ActiveTheme, Icon, IconName, Sizable, VirtualListScrollHandle,
+    v_flex, v_virtual_list,
 };
 
 use crate::chat::events::ConversationSelected;

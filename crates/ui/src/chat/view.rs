@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{h_flex, v_flex, ActiveTheme};
+use gpui_component::{ActiveTheme, h_flex, v_flex};
 use gpui_tokio_bridge::Tokio;
 
 use crate::chat::events::{ConversationSelected, Stop, Submit};
@@ -787,8 +787,15 @@ impl ChatView {
             .insert(conversation_id, Conversation::new(conversation_id, title));
     }
 
-    fn hydrate_conversation_messages(&mut self, conversation_id: ConversationId, cx: &mut Context<Self>) {
-        let persisted_messages = self.sidebar.read(cx).list_persisted_messages(conversation_id);
+    fn hydrate_conversation_messages(
+        &mut self,
+        conversation_id: ConversationId,
+        cx: &mut Context<Self>,
+    ) {
+        let persisted_messages = self
+            .sidebar
+            .read(cx)
+            .list_persisted_messages(conversation_id);
         let mut hydrated_messages = Vec::with_capacity(persisted_messages.len());
         let mut storage_message_ids = HashMap::with_capacity(persisted_messages.len());
 
@@ -819,10 +826,10 @@ impl ChatView {
         content: String,
         cx: &mut Context<Self>,
     ) {
-        let persisted_message = self
-            .sidebar
-            .read(cx)
-            .append_persisted_message(conversation_id, role, content);
+        let persisted_message =
+            self.sidebar
+                .read(cx)
+                .append_persisted_message(conversation_id, role, content);
         if let Some(persisted_message) = persisted_message {
             self.storage_message_ids
                 .entry(conversation_id)

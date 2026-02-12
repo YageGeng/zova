@@ -1,11 +1,12 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
+    ActiveTheme, IndexPath, Sizable, ThemeMode, ThemeRegistry,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
-    v_flex, ActiveTheme, IndexPath, Sizable, ThemeMode, ThemeRegistry,
+    v_flex,
 };
 
 use crate::settings::state::{ModelSettings, ProviderSettings, SettingsState};

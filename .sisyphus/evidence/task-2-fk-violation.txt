@@ -1,0 +1,4 @@
+scenario=fk_violation
+db_path=.sisyphus/evidence/task-2.db
+fk_violation_blocked=true
+runner_ok=true

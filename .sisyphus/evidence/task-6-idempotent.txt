@@ -1,0 +1,7 @@
+scenario=migrate_idempotent
+db_path=.sisyphus/evidence/task-6.db
+first_imported_sessions=3
+second_imported_sessions=0
+already_migrated=true
+idempotent=true
+runner_ok=true

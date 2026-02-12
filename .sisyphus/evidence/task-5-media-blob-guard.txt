@@ -1,0 +1,4 @@
+scenario=media_blob_guard
+db_path=.sisyphus/evidence/task-5.db
+blob_guard=true
+runner_ok=true

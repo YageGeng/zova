@@ -1,7 +1,9 @@
 {
-  "active_plan": "/Users/isbset/Documents/zova/.sisyphus/plans/chatgpui-rig-chat-ui-mvp.md",
-  "started_at": "2026-02-12T07:14:27.061Z",
-  "session_ids": ["ses_3af6964f2ffeS0Pm21VpTWzSeP"],
-  "plan_name": "chatgpui-rig-chat-ui-mvp",
+  "active_plan": "/home/isbest/Documents/WorkSpace/zova/.sisyphus/plans/chat-storage-sqlite-trait-schema.md",
+  "started_at": "2026-02-12T15:20:59.115Z",
+  "session_ids": [
+    "ses_3adb0d28affeNYY66eSxXlnR85"
+  ],
+  "plan_name": "chat-storage-sqlite-trait-schema",
   "agent": "atlas"
 }

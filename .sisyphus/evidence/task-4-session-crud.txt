@@ -1,0 +1,9 @@
+scenario=session_crud
+db_path=.sisyphus/evidence/task-4.db
+created=2
+soft_deleted=1
+restored=1
+active_after_delete_count=1
+active_after_restore_count=2
+list_order_ok=true
+runner_ok=true

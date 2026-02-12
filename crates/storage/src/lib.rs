@@ -7,9 +7,9 @@ pub use error::{StorageError, StorageResult};
 pub use ids::{AgentEventId, BranchId, MediaRefId, MessageId, SessionId};
 pub use sqlite::SqliteStorage;
 pub use types::{
-    AgentEventRecord, HistoryForkOutcome, HistoryForkRequest, MediaRefRecord, MessageIdRemap,
-    MessagePatch, MessageRecord, MessageRole, NewAgentEvent, NewMediaRef, NewMessage, NewSession,
-    SessionPatch, SessionRecord, DEFAULT_SESSION_TITLE,
+    AgentEventRecord, DEFAULT_SESSION_TITLE, HistoryForkOutcome, HistoryForkRequest,
+    MediaRefRecord, MessageIdRemap, MessagePatch, MessageRecord, MessageRole, NewAgentEvent,
+    NewMediaRef, NewMessage, NewSession, SessionPatch, SessionRecord,
 };
 
 pub trait SessionStore: Send + Sync {

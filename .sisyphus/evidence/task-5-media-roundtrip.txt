@@ -1,0 +1,5 @@
+scenario=media_ref_roundtrip
+db_path=.sisyphus/evidence/task-5.db
+stored_uri=file:///tmp/sample-audio.mp3
+media_roundtrip=true
+runner_ok=true

@@ -1,0 +1,8 @@
+scenario=migrate_malformed_row
+db_path=.sisyphus/evidence/task-6.db
+imported_sessions=2
+malformed_rows_skipped=3
+malformed_row_signal=true
+warning_lines=2,3,4
+default_title_applied=true
+runner_ok=true
