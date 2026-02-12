@@ -1,18 +1,25 @@
 [package]
-name = "chat-app"
-version = "0.1.0"
 edition = "2024"
+name = "zova"
 publish = false
+version = "0.1.0"
 
 [dependencies]
+arc-swap.workspace = true
+dirs.workspace = true
+figment.workspace = true
+futures.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true
 gpui-tokio-bridge.workspace = true
-core-text.workspace = true
 rig-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-futures.workspace = true
-snafu.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text.workspace = true

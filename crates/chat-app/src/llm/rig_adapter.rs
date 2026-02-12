@@ -52,8 +52,8 @@ impl RigProviderAdapter {
 
     fn build_client(config: &ProviderConfig) -> ProviderResult<openai::Client> {
         let mut builder = openai::Client::builder().api_key(config.api_key.as_str());
-        if !config.base_url.is_empty() {
-            builder = builder.base_url(config.base_url.as_str());
+        if !config.endpoint.is_empty() {
+            builder = builder.base_url(config.endpoint.as_str());
         }
         builder.build().context(HttpClientSnafu {
             stage: "build-client",
@@ -308,10 +308,7 @@ impl LlmProvider for RigProviderAdapter {
     }
 
     fn default_model(&self) -> &str {
-        self.config
-            .default_model
-            .as_deref()
-            .unwrap_or(DEFAULT_OPENAI_MODEL)
+        DEFAULT_OPENAI_MODEL
     }
 
     fn fallback_models(&self) -> &[Model] {

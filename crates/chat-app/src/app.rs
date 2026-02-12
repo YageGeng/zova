@@ -1,16 +1,14 @@
 use std::path::PathBuf;
-use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::notification::NotificationList;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable,
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable,
 };
 
-use crate::chat::{ChatSidebar, ChatView};
+use crate::chat::{ChatSidebar, ChatView, SidebarToggleClicked};
 
 /// Returns the default themes directory path.
 /// This is a pure function to allow deterministic testing of path resolution.
@@ -24,12 +22,11 @@ pub const SIDEBAR_DEFAULT_WIDTH: f32 = 260.0;
 pub const SIDEBAR_MIN_WIDTH: f32 = 200.0;
 /// Maximum allowed sidebar width.
 pub const SIDEBAR_MAX_WIDTH: f32 = 400.0;
-/// Duration of the sidebar collapse/expand animation.
-const SIDEBAR_ANIMATION_DURATION: Duration = Duration::from_millis(150);
-
+pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
 /// Compile-time validation of sidebar layout constraints.
 /// These assertions ensure the constants maintain valid relationships.
 const _: () = {
+    assert!(SIDEBAR_COLLAPSED_WIDTH > 0.0);
     assert!(SIDEBAR_MIN_WIDTH < SIDEBAR_DEFAULT_WIDTH);
     assert!(SIDEBAR_DEFAULT_WIDTH < SIDEBAR_MAX_WIDTH);
     assert!(SIDEBAR_MIN_WIDTH > 0.0);
@@ -80,8 +77,6 @@ pub struct ChatAppShell {
     sidebar_collapsed: bool,
     /// Current width of the sidebar when expanded.
     sidebar_width: f32,
-    /// Animation trigger counter incremented on each toggle to reset animation state.
-    animation_trigger: usize,
 }
 
 impl ChatAppShell {
@@ -98,20 +93,22 @@ impl ChatAppShell {
     ) -> Self {
         let chat_view = cx.new(|cx| ChatView::new(window, cx));
 
+        cx.subscribe(&chat_view, |this, _, _event: &SidebarToggleClicked, cx| {
+            this.toggle_sidebar(cx);
+        })
+        .detach();
+
         Self {
             notification_list,
             chat_view,
             sidebar_collapsed: false,
             sidebar_width: SIDEBAR_DEFAULT_WIDTH,
-            animation_trigger: 0,
         }
     }
 
     /// Toggles the sidebar between collapsed and expanded states.
-    /// Increments the animation trigger to ensure the animation resets properly.
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
-        self.animation_trigger += 1;
         cx.notify();
     }
 
@@ -128,6 +125,11 @@ impl ChatAppShell {
     fn new_chat(&mut self, cx: &mut Context<Self>) {
         self.chat_view
             .update(cx, |chat_view, cx| chat_view.create_conversation(cx));
+    }
+
+    fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.chat_view
+            .update(cx, |chat_view, cx| chat_view.open_settings_panel(cx));
     }
 }
 
@@ -159,74 +161,107 @@ impl Render for ChatAppShell {
                             .child(self.chat_view.clone()),
                     ),
             )
-            // Toolbar buttons positioned in the top-left (after traffic lights on macOS)
-            .child(
-                h_flex()
-                    .absolute()
-                    .top(px(8.))
-                    .left(px(80.)) // Offset for macOS traffic lights
-                    .gap_2()
-                    .child(
-                        Button::new("toggle-sidebar")
-                            .ghost()
-                            .small()
-                            .icon(IconName::PanelLeft)
-                            .child("Sidebar")
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.toggle_sidebar(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("new-chat")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .child("New")
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.new_chat(cx);
-                            })),
-                    ),
-            )
             // Notification layer for toast messages
             .child(self.notification_list.clone())
     }
 }
 
 impl ChatAppShell {
-    /// Renders the sidebar with collapse/expand animation.
-    ///
-    /// Uses GPUI's animation system to smoothly transition between
-    /// collapsed (0 width) and expanded (sidebar_width) states.
-    fn render_sidebar(
-        &self,
-        sidebar: Entity<ChatSidebar>,
-        _cx: &Context<Self>,
-    ) -> impl IntoElement {
+    fn render_collapsed_sidebar(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+
+        v_flex()
+            .id("collapsed-sidebar")
+            .size_full()
+            .items_center()
+            .justify_between()
+            .py_3()
+            .px_2()
+            .child(
+                v_flex().items_center().gap_2().child(
+                    Button::new("new-chat-collapsed")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Plus)
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.new_chat(cx);
+                        })),
+                ),
+            )
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("collapsed-user-center")
+                            .size(px(32.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.muted)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(IconName::CircleUser)
+                                    .size(px(18.))
+                                    .text_color(theme.foreground),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                Button::new("sidebar-settings-collapsed")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Settings)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.open_settings(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("toggle-sidebar-collapsed")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::PanelLeftOpen)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.toggle_sidebar(cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_sidebar(&self, sidebar: Entity<ChatSidebar>, cx: &Context<Self>) -> impl IntoElement {
         let collapsed = self.sidebar_collapsed;
         let expanded_width = self.sidebar_width;
-        let animation_trigger = self.animation_trigger;
-
-        // Calculate start and end widths for the animation
-        let (start_width, end_width) = if collapsed {
-            (expanded_width, 0.0)
+        let sidebar_width = if collapsed {
+            SIDEBAR_COLLAPSED_WIDTH
         } else {
-            (0.0, expanded_width)
+            expanded_width
         };
+        let sidebar_content = if collapsed {
+            self.render_collapsed_sidebar(cx)
+        } else {
+            sidebar.into_any_element()
+        };
+        let theme = cx.theme();
 
         div()
             .id("sidebar-container")
             .h_full()
+            .min_w_0()
             .flex_shrink_0()
+            .w(px(sidebar_width))
             .overflow_hidden()
-            .child(sidebar)
-            .with_animation(
-                ("sidebar-anim", animation_trigger),
-                Animation::new(SIDEBAR_ANIMATION_DURATION).with_easing(ease_in_out),
-                move |el, delta| {
-                    let width = start_width + (end_width - start_width) * delta;
-                    el.w(px(width))
-                },
-            )
+            .bg(theme.background)
+            .border_r_1()
+            .border_color(theme.border)
+            .child(sidebar_content)
     }
 
     /// Renders the resize handle for adjusting sidebar width.

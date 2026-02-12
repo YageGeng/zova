@@ -7,7 +7,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 
 use crate::chat::ConversationId;
 
-const DEFAULT_STORE_RELATIVE_PATH: &str = ".chat-app/conversations.tsv";
+const DEFAULT_STORE_RELATIVE_PATH: &str = ".zova/conversations.tsv";
 pub const DEFAULT_CONVERSATION_TITLE: &str = "New Conversation";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

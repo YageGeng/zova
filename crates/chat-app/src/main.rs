@@ -2,8 +2,8 @@ use gpui::*;
 use gpui_component::notification::NotificationList;
 use gpui_component::{Root, ThemeRegistry};
 
-use chat_app::app::{ChatAppShell, NewChat, Quit, ToggleSidebar, default_themes_path};
-use chat_app::settings::state::SettingsStore;
+use zova::app::{ChatAppShell, NewChat, Quit, ToggleSidebar, default_themes_path};
+use zova::settings::state::SettingsStore;
 
 /// Application entry point.
 ///

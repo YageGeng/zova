@@ -16,5 +16,5 @@ pub mod settings;
 
 /// Returns a stable marker used by integration smoke tests.
 pub fn smoke_marker() -> &'static str {
-    "chat-app"
+    "zova"
 }

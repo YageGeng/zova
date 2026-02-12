@@ -1,45 +1,115 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
+use figment::{
+    Figment,
+    providers::{Format, Json, Serialized},
+};
 use gpui::*;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use snafu::{ResultExt, Snafu};
 
-/// Default provider ID when none is specified.
 pub const DEFAULT_PROVIDER_ID: &str = "openai";
+pub const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1";
+pub const SETTINGS_DIRECTORY_NAME: &str = "zova";
+pub const SETTINGS_FILE_NAME: &str = "settings.json";
 
-/// Default base URL for OpenAI API.
-pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelSettings {
+    pub model_name: String,
+    #[serde(default)]
+    pub max_completion_tokens: Option<u64>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
+}
 
-/// Settings that persist across app restarts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl Default for ModelSettings {
+    fn default() -> Self {
+        Self {
+            model_name: crate::llm::DEFAULT_OPENAI_MODEL.to_string(),
+            max_completion_tokens: None,
+            max_output_tokens: None,
+            max_tokens: None,
+        }
+    }
+}
+
+impl ModelSettings {
+    fn normalized(mut self) -> Option<Self> {
+        self.model_name = self.model_name.trim().to_string();
+        if self.model_name.is_empty() {
+            return None;
+        }
+
+        Some(self)
+    }
+
+    pub fn as_selector_model(&self) -> crate::llm::Model {
+        let mut model = crate::llm::Model::from_id(self.model_name.clone());
+        if let Some(description) = self.token_limits_description() {
+            model = model.with_description(description);
+        }
+        model
+    }
+
+    fn token_limits_description(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(value) = self.max_completion_tokens {
+            parts.push(format!("max_completion_tokens={value}"));
+        }
+        if let Some(value) = self.max_output_tokens {
+            parts.push(format!("max_output_tokens={value}"));
+        }
+        if let Some(value) = self.max_tokens {
+            parts.push(format!("max_tokens={value}"));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(", "))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSettings {
-    /// Provider identifier (e.g., "openai")
+    #[serde(default = "default_provider_id")]
     pub provider_id: String,
-    /// API key for the provider
+    #[serde(default)]
     pub api_key: String,
-    /// Base URL for the provider API
-    pub base_url: String,
-    /// Default model ID to use
-    pub default_model: String,
+    #[serde(default = "default_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_models")]
+    pub models: Vec<ModelSettings>,
+    #[serde(
+        default = "default_theme_mode",
+        serialize_with = "serialize_theme_mode",
+        deserialize_with = "deserialize_theme_mode"
+    )]
     pub theme_mode: ThemeMode,
+    #[serde(default)]
     pub theme_name: String,
 }
 
 impl Default for ProviderSettings {
     fn default() -> Self {
         Self {
-            provider_id: DEFAULT_PROVIDER_ID.to_string(),
+            provider_id: default_provider_id(),
             api_key: String::new(),
-            base_url: DEFAULT_BASE_URL.to_string(),
-            default_model: crate::llm::DEFAULT_OPENAI_MODEL.to_string(),
-            theme_mode: ThemeMode::Light,
+            endpoint: default_endpoint(),
+            models: default_models(),
+            theme_mode: default_theme_mode(),
             theme_name: String::new(),
         }
     }
 }
 
 impl ProviderSettings {
-    /// Creates provider config from these settings.
-    /// Returns None if API key is empty.
     pub fn to_provider_config(&self) -> Option<crate::llm::ProviderConfig> {
         if self.api_key.trim().is_empty() {
             return None;
@@ -48,14 +118,75 @@ impl ProviderSettings {
         Some(crate::llm::ProviderConfig::new(
             &self.provider_id,
             &self.api_key,
-            &self.base_url,
-            Some(self.default_model.clone()),
+            &self.endpoint,
         ))
     }
 
-    /// Returns true if the settings are valid (have non-empty API key).
     pub fn is_valid(&self) -> bool {
         !self.api_key.trim().is_empty()
+    }
+
+    pub fn default_model_name(&self) -> String {
+        self.models
+            .iter()
+            .find_map(|model| {
+                let name = model.model_name.trim();
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
+            .unwrap_or_else(|| crate::llm::DEFAULT_OPENAI_MODEL.to_string())
+    }
+
+    pub fn configured_models(&self) -> Vec<crate::llm::Model> {
+        let models = self
+            .models
+            .iter()
+            .filter_map(|model| model.clone().normalized())
+            .map(|model| model.as_selector_model())
+            .collect::<Vec<_>>();
+
+        if models.is_empty() {
+            vec![ModelSettings::default().as_selector_model()]
+        } else {
+            models
+        }
+    }
+
+    pub fn model_max_tokens(&self, model_name: &str) -> Option<u64> {
+        self.models
+            .iter()
+            .find(|model| model.model_name == model_name)
+            .and_then(|model| model.max_tokens)
+    }
+
+    pub fn normalized(mut self) -> Self {
+        self.provider_id = if self.provider_id.trim().is_empty() {
+            default_provider_id()
+        } else {
+            self.provider_id.trim().to_string()
+        };
+        self.api_key = self.api_key.trim().to_string();
+        self.endpoint = if self.endpoint.trim().is_empty() {
+            default_endpoint()
+        } else {
+            self.endpoint.trim().to_string()
+        };
+        self.theme_name = self.theme_name.trim().to_string();
+
+        // Keep provider->models relationship valid by removing blank rows.
+        self.models = self
+            .models
+            .into_iter()
+            .filter_map(ModelSettings::normalized)
+            .collect();
+        if self.models.is_empty() {
+            self.models.push(ModelSettings::default());
+        }
+
+        self
     }
 
     pub fn apply_theme(&self, window: Option<&mut Window>, cx: &mut App) {
@@ -79,120 +210,89 @@ impl ProviderSettings {
     }
 }
 
-/// Settings persistence layer using a simple line-based format.
 pub struct SettingsStore {
-    settings: ProviderSettings,
+    settings: Arc<ArcSwap<ProviderSettings>>,
     config_path: PathBuf,
 }
 
 impl SettingsStore {
-    /// Returns the default config file path in the user's home directory.
-    pub fn default_config_path() -> PathBuf {
-        // Use .chat-app directory in current working directory for MVP
-        PathBuf::from(".chat-app").join("settings.conf")
+    pub fn default_config_dir() -> PathBuf {
+        dirs::config_dir()
+            .map(|path| path.join(SETTINGS_DIRECTORY_NAME))
+            .unwrap_or_else(|| PathBuf::from(".zova"))
     }
 
-    /// Creates a new settings store with the given config path.
+    pub fn default_config_path() -> PathBuf {
+        Self::default_config_dir().join(SETTINGS_FILE_NAME)
+    }
+
     pub fn new(config_path: PathBuf) -> Self {
         let settings = Self::load_from_disk(&config_path);
         Self {
-            settings,
+            settings: Arc::new(ArcSwap::from_pointee(settings)),
             config_path,
         }
     }
 
-    /// Loads settings with default path.
     pub fn load() -> Self {
         Self::new(Self::default_config_path())
     }
 
-    /// Returns current settings.
-    pub fn settings(&self) -> &ProviderSettings {
-        &self.settings
+    pub fn settings(&self) -> Arc<ProviderSettings> {
+        self.settings.load_full()
     }
 
-    /// Updates settings and persists to disk.
-    pub fn update(&mut self, settings: ProviderSettings) -> Result<(), SettingsError> {
-        self.persist(&settings)?;
-        self.settings = settings;
+    pub fn update(&self, settings: ProviderSettings) -> Result<(), SettingsError> {
+        let normalized_settings = settings.normalized();
+        self.persist(&normalized_settings)?;
+        self.settings.store(Arc::new(normalized_settings));
         Ok(())
     }
 
-    /// Loads settings from disk or returns defaults.
     fn load_from_disk(path: &PathBuf) -> ProviderSettings {
-        let content = match std::fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(_) => {
-                tracing::info!("settings file not found at {:?}, using defaults", path);
-                return ProviderSettings::default();
-            }
-        };
-
-        Self::parse_settings(&content)
-    }
-
-    /// Parses settings from content using key=value format.
-    fn parse_settings(content: &str) -> ProviderSettings {
-        let mut settings = ProviderSettings::default();
-
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            if let Some((key, value)) = line.split_once('=') {
-                let key = key.trim();
-                let value = value.trim();
-
-                match key {
-                    "provider_id" => settings.provider_id = value.to_string(),
-                    "api_key" => settings.api_key = value.to_string(),
-                    "base_url" => settings.base_url = value.to_string(),
-                    "default_model" => settings.default_model = value.to_string(),
-                    "theme_mode" => settings.theme_mode = parse_theme_mode(value),
-                    "theme_name" => settings.theme_name = value.to_string(),
-                    _ => {}
-                }
-            }
+        if !path.exists() {
+            tracing::info!("settings file not found at {:?}, using defaults", path);
+            return ProviderSettings::default();
         }
 
-        settings
+        let figment = Figment::from(Serialized::defaults(ProviderSettings::default()))
+            .merge(Json::file(path));
+
+        match figment.extract::<ProviderSettings>() {
+            Ok(settings) => settings.normalized(),
+            Err(error) => {
+                tracing::warn!(
+                    "failed to parse settings from {:?}: {}. using defaults",
+                    path,
+                    error
+                );
+                ProviderSettings::default()
+            }
+        }
     }
 
-    /// Formats settings for persistence.
-    fn format_settings(settings: &ProviderSettings) -> String {
-        format!(
-            "# Chat App Settings\n\
-             provider_id={}\n\
-             api_key={}\n\
-             base_url={}\n\
-             default_model={}\n\
-             theme_mode={}\n\
-             theme_name={}\n",
-            settings.provider_id,
-            settings.api_key,
-            settings.base_url,
-            settings.default_model,
-            settings.theme_mode.name(),
-            settings.theme_name
-        )
-    }
-
-    /// Persists settings to disk.
     fn persist(&self, settings: &ProviderSettings) -> Result<(), SettingsError> {
         if let Some(parent) = self.config_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| SettingsError::CreateDir {
+            std::fs::create_dir_all(parent).context(CreateDirSnafu {
+                stage: "create-settings-directory",
                 path: parent.to_path_buf(),
-                source: e,
             })?;
         }
 
-        let content = Self::format_settings(settings);
+        let content = serde_json::to_string_pretty(settings).context(SerializeConfigSnafu {
+            stage: "serialize-settings-json",
+        })?;
 
-        std::fs::write(&self.config_path, content).map_err(|e| SettingsError::WriteFile {
-            path: self.config_path.clone(),
-            source: e,
+        let temp_path = self.config_path.with_extension("json.tmp");
+        std::fs::write(&temp_path, content).context(WriteFileSnafu {
+            stage: "write-temporary-settings-file",
+            path: temp_path.clone(),
+        })?;
+
+        std::fs::rename(&temp_path, &self.config_path).context(RenameTempFileSnafu {
+            stage: "rename-temporary-settings-file",
+            from: temp_path,
+            to: self.config_path.clone(),
         })?;
 
         tracing::info!("saved settings to {:?}", self.config_path);
@@ -200,59 +300,41 @@ impl SettingsStore {
     }
 }
 
-/// Errors that can occur during settings operations.
-#[derive(Debug)]
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum SettingsError {
+    #[snafu(display("failed to create settings directory at {path:?} on `{stage}`: {source}"))]
     CreateDir {
+        stage: &'static str,
         path: PathBuf,
         source: std::io::Error,
     },
+    #[snafu(display("failed to serialize settings on `{stage}`: {source}"))]
+    SerializeConfig {
+        stage: &'static str,
+        source: serde_json::Error,
+    },
+    #[snafu(display("failed to write settings file at {path:?} on `{stage}`: {source}"))]
     WriteFile {
+        stage: &'static str,
         path: PathBuf,
+        source: std::io::Error,
+    },
+    #[snafu(display(
+        "failed to replace settings file from {from:?} to {to:?} on `{stage}`: {source}"
+    ))]
+    RenameTempFile {
+        stage: &'static str,
+        from: PathBuf,
+        to: PathBuf,
         source: std::io::Error,
     },
 }
 
-impl std::fmt::Display for SettingsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SettingsError::CreateDir { path, source } => {
-                write!(
-                    f,
-                    "failed to create config directory at {:?}: {}",
-                    path, source
-                )
-            }
-            SettingsError::WriteFile { path, source } => {
-                write!(f, "failed to write settings file to {:?}: {}", path, source)
-            }
-        }
-    }
-}
-
-impl std::error::Error for SettingsError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            SettingsError::CreateDir { source, .. } => Some(source),
-            SettingsError::WriteFile { source, .. } => Some(source),
-        }
-    }
-}
-
-fn parse_theme_mode(value: &str) -> ThemeMode {
-    if value.trim().eq_ignore_ascii_case("dark") {
-        ThemeMode::Dark
-    } else {
-        ThemeMode::Light
-    }
-}
-
-/// GPUI entity that holds settings state and emits change events.
 pub struct SettingsState {
     store: SettingsStore,
 }
 
-/// Emitted when settings change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsChanged {
     pub settings: ProviderSettings,
@@ -261,29 +343,66 @@ pub struct SettingsChanged {
 impl EventEmitter<SettingsChanged> for SettingsState {}
 
 impl SettingsState {
-    /// Creates a new settings state entity.
     pub fn new(cx: &mut App) -> Entity<Self> {
         cx.new(|_| Self {
             store: SettingsStore::load(),
         })
     }
 
-    /// Returns current settings.
-    pub fn settings(&self) -> &ProviderSettings {
+    pub fn settings(&self) -> Arc<ProviderSettings> {
         self.store.settings()
     }
 
-    /// Updates settings and notifies subscribers.
     pub fn update_settings(
         &mut self,
         settings: ProviderSettings,
         cx: &mut Context<Self>,
     ) -> Result<(), SettingsError> {
-        self.store.update(settings.clone())?;
+        let normalized_settings = settings.normalized();
+        self.store.update(normalized_settings.clone())?;
         cx.emit(SettingsChanged {
-            settings: settings.clone(),
+            settings: normalized_settings,
         });
         cx.notify();
         Ok(())
+    }
+}
+
+fn default_provider_id() -> String {
+    DEFAULT_PROVIDER_ID.to_string()
+}
+
+fn default_endpoint() -> String {
+    DEFAULT_ENDPOINT.to_string()
+}
+
+fn default_models() -> Vec<ModelSettings> {
+    vec![ModelSettings::default()]
+}
+
+fn default_theme_mode() -> ThemeMode {
+    ThemeMode::Light
+}
+
+fn serialize_theme_mode<S>(value: &ThemeMode, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(value.name())
+}
+
+fn deserialize_theme_mode<'de, D>(deserializer: D) -> Result<ThemeMode, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    Ok(parse_theme_mode(&value))
+}
+
+fn parse_theme_mode(value: &str) -> ThemeMode {
+    if value.trim().eq_ignore_ascii_case("dark") {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
     }
 }

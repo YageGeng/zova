@@ -3,13 +3,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable, VirtualListScrollHandle,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
     label::Label,
     list::ListItem,
-    v_flex, v_virtual_list,
+    v_flex, v_virtual_list, ActiveTheme, Icon, IconName, Sizable, VirtualListScrollHandle,
 };
 
 use crate::chat::events::ConversationSelected;
@@ -45,6 +44,16 @@ pub struct ChatSidebar {
 }
 
 impl EventEmitter<ConversationSelected> for ChatSidebar {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarSettingsClicked;
+
+impl EventEmitter<SidebarSettingsClicked> for ChatSidebar {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarToggleClicked;
+
+impl EventEmitter<SidebarToggleClicked> for ChatSidebar {}
 
 impl ChatSidebar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -184,21 +193,21 @@ impl ChatSidebar {
             &mut item_sizes,
             "Today",
             today_items,
-            px(240.),
+            px(0.),
         );
         append_group(
             &mut flat_items,
             &mut item_sizes,
             "Yesterday",
             yesterday_items,
-            px(240.),
+            px(0.),
         );
         append_group(
             &mut flat_items,
             &mut item_sizes,
             "Older",
             older_items,
-            px(240.),
+            px(0.),
         );
 
         self.flat_items = flat_items;
@@ -208,8 +217,10 @@ impl ChatSidebar {
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
+            .min_w_0()
             .gap_2()
             .px_3()
+            .pt(px(8.))
             .pb_2()
             .child(Input::new(&self.search_input).w_full().small())
             .child(
@@ -321,6 +332,60 @@ impl ChatSidebar {
             )
             .into_any_element()
     }
+
+    fn render_footer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .justify_between()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .id("sidebar-user-center")
+                    .size(px(32.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.muted)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(IconName::CircleUser)
+                            .size(px(18.))
+                            .text_color(theme.foreground),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Button::new("sidebar-settings")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Settings)
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(SidebarSettingsClicked);
+                            })),
+                    )
+                    .child(
+                        Button::new("sidebar-toggle")
+                            .ghost()
+                            .small()
+                            .icon(IconName::PanelLeftClose)
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(SidebarToggleClicked);
+                            })),
+                    ),
+            )
+    }
 }
 
 impl Render for ChatSidebar {
@@ -329,10 +394,12 @@ impl Render for ChatSidebar {
 
         v_flex()
             .size_full()
+            .min_w_0()
+            .overflow_hidden()
             .bg(theme.background)
-            .pt(px(44.))
             .child(self.render_toolbar(cx))
             .child(self.render_history_list(cx))
+            .child(self.render_footer(cx))
     }
 }
 

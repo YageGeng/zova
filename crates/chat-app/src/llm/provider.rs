@@ -12,22 +12,19 @@ use super::model::{Model, ModelCatalog};
 pub struct ProviderConfig {
     pub provider_id: String,
     pub api_key: String,
-    pub base_url: String,
-    pub default_model: Option<String>,
+    pub endpoint: String,
 }
 
 impl ProviderConfig {
     pub fn new(
         provider_id: impl Into<String>,
         api_key: impl Into<String>,
-        base_url: impl Into<String>,
-        default_model: Option<String>,
+        endpoint: impl Into<String>,
     ) -> Self {
         Self {
             provider_id: provider_id.into().trim().to_string(),
             api_key: api_key.into().trim().to_string(),
-            base_url: base_url.into().trim().to_string(),
-            default_model,
+            endpoint: endpoint.into().trim().to_string(),
         }
     }
 }

@@ -185,7 +185,7 @@ impl MessageList {
                 }
             }
 
-            let mut row = self.render_message_row(&message, index, cx);
+            let mut row = self.render_message_row(&message, index, window, cx);
             let measured_height = row.layout_as_root(available_space, window, cx).height;
             let Some(entry) = self.size_cache.get_mut(&message.id) else {
                 continue;
@@ -208,11 +208,11 @@ impl MessageList {
         &self,
         message: &Message,
         index: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = cx.theme();
-
         if message.role == Role::User {
+            let theme = cx.theme();
             let content = if message.content.is_empty() {
                 " ".to_string()
             } else {
@@ -241,7 +241,8 @@ impl MessageList {
             "Assistant"
         };
 
-        let content = self.render_assistant_content(message, index);
+        let content = self.render_assistant_content(message, index, window, cx);
+        let theme = cx.theme();
         let error_message = if let MessageStatus::Error(error) = &message.status {
             Some(error.clone())
         } else {
@@ -284,7 +285,13 @@ impl MessageList {
             .into_any_element()
     }
 
-    fn render_assistant_content(&self, message: &Message, index: usize) -> AnyElement {
+    fn render_assistant_content(
+        &self,
+        message: &Message,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if message.content.trim().is_empty() {
             let empty_label = if matches!(message.status, MessageStatus::Streaming(_)) {
                 "Waiting for response..."
@@ -307,12 +314,12 @@ impl MessageList {
             message.id.0
         )));
 
-        TextView::markdown(markdown_id, message.content.clone())
+        TextView::markdown(markdown_id, message.content.clone(), window, cx)
             .code_block_actions(|code_block, _window, _cx| {
                 let code = code_block.code().to_string();
                 let mut hasher = DefaultHasher::new();
                 hasher.write(code.as_bytes());
-                let copy_button_id = format!("copy-code-{}", hasher.finish());
+                let copy_button_id = ("copy-code", hasher.finish());
 
                 h_flex().w_full().justify_end().child(
                     Button::new(copy_button_id)
@@ -350,7 +357,7 @@ impl Render for MessageList {
                             this.messages
                                 .get(index)
                                 .cloned()
-                                .map(|message| this.render_message_row(&message, index, cx))
+                                .map(|message| this.render_message_row(&message, index, window, cx))
                         })
                         .collect::<Vec<_>>()
                 },

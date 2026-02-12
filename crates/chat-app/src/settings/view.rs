@@ -1,22 +1,28 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, IndexPath, Sizable, ThemeMode, ThemeRegistry,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
-    v_flex,
+    v_flex, ActiveTheme, IndexPath, Sizable, ThemeMode, ThemeRegistry,
 };
 
-use crate::settings::state::{ProviderSettings, SettingsState};
+use crate::settings::state::{ModelSettings, ProviderSettings, SettingsState};
+
+struct ModelInputRow {
+    model_name_input: Entity<InputState>,
+    max_completion_tokens_input: Entity<InputState>,
+    max_output_tokens_input: Entity<InputState>,
+    max_tokens_input: Entity<InputState>,
+}
 
 pub struct SettingsView {
     state: Entity<SettingsState>,
     provider_input: Entity<InputState>,
     api_key_input: Entity<InputState>,
-    base_url_input: Entity<InputState>,
-    model_input: Entity<InputState>,
+    endpoint_input: Entity<InputState>,
+    model_rows: Vec<ModelInputRow>,
     theme_preset_select: Entity<SelectState<Vec<SharedString>>>,
     theme_mode: ThemeMode,
     error_message: Option<String>,
@@ -50,8 +56,141 @@ impl SettingsView {
             .map(|index| IndexPath::default().row(index))
     }
 
+    fn new_model_row(
+        model: &ModelSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> ModelInputRow {
+        let model_name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Model Name (e.g., gpt-4o-mini)"));
+        model_name_input.update(cx, |input_state, cx| {
+            input_state.set_value(model.model_name.clone(), window, cx);
+        });
+
+        let max_completion_tokens_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder("max_completion_tokens (optional)"));
+        max_completion_tokens_input.update(cx, |input_state, cx| {
+            input_state.set_value(
+                model
+                    .max_completion_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+
+        let max_output_tokens_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("max_output_tokens (optional)"));
+        max_output_tokens_input.update(cx, |input_state, cx| {
+            input_state.set_value(
+                model
+                    .max_output_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+
+        let max_tokens_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("max_tokens (optional)"));
+        max_tokens_input.update(cx, |input_state, cx| {
+            input_state.set_value(
+                model
+                    .max_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+
+        ModelInputRow {
+            model_name_input,
+            max_completion_tokens_input,
+            max_output_tokens_input,
+            max_tokens_input,
+        }
+    }
+
+    fn build_model_rows(
+        settings: &ProviderSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<ModelInputRow> {
+        let models = if settings.models.is_empty() {
+            vec![ModelSettings::default()]
+        } else {
+            settings.models.clone()
+        };
+
+        models
+            .iter()
+            .map(|model| Self::new_model_row(model, window, cx))
+            .collect()
+    }
+
+    fn parse_optional_u64(
+        value: &str,
+        field_name: &str,
+        model_name: &str,
+    ) -> Result<Option<u64>, String> {
+        let trimmed_value = value.trim();
+        if trimmed_value.is_empty() {
+            return Ok(None);
+        }
+
+        let parsed_value = trimmed_value.parse::<u64>().map_err(|_| {
+            format!("Model '{model_name}' field '{field_name}' must be an unsigned integer")
+        })?;
+
+        Ok(Some(parsed_value))
+    }
+
+    fn collect_models(&self, cx: &App) -> Result<Vec<ModelSettings>, String> {
+        if self.model_rows.is_empty() {
+            return Err("At least one model is required".to_string());
+        }
+
+        let mut models = Vec::with_capacity(self.model_rows.len());
+        for (index, row) in self.model_rows.iter().enumerate() {
+            let model_name = row.model_name_input.read(cx).value().to_string();
+            let trimmed_model_name = model_name.trim();
+            if trimmed_model_name.is_empty() {
+                return Err(format!("Model #{} requires a model name", index + 1));
+            }
+
+            let max_completion_tokens =
+                row.max_completion_tokens_input.read(cx).value().to_string();
+            let max_output_tokens = row.max_output_tokens_input.read(cx).value().to_string();
+            let max_tokens = row.max_tokens_input.read(cx).value().to_string();
+
+            models.push(ModelSettings {
+                model_name: trimmed_model_name.to_string(),
+                max_completion_tokens: Self::parse_optional_u64(
+                    &max_completion_tokens,
+                    "max_completion_tokens",
+                    trimmed_model_name,
+                )?,
+                max_output_tokens: Self::parse_optional_u64(
+                    &max_output_tokens,
+                    "max_output_tokens",
+                    trimmed_model_name,
+                )?,
+                max_tokens: Self::parse_optional_u64(
+                    &max_tokens,
+                    "max_tokens",
+                    trimmed_model_name,
+                )?,
+            });
+        }
+
+        Ok(models)
+    }
+
     pub fn new(state: &Entity<SettingsState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let settings = state.read(cx).settings().clone();
+        let settings = state.read(cx).settings();
 
         let provider_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Provider ID (e.g., openai)"));
@@ -64,18 +203,14 @@ impl SettingsView {
             input_state.set_value(settings.api_key.clone(), window, cx);
         });
 
-        let base_url_input = cx.new(|cx| {
+        let endpoint_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Endpoint (e.g., https://api.openai.com/v1)")
         });
-        base_url_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.base_url.clone(), window, cx);
+        endpoint_input.update(cx, |input_state, cx| {
+            input_state.set_value(settings.endpoint.clone(), window, cx);
         });
 
-        let model_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("Default Model (e.g., gpt-4o-mini)"));
-        model_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.default_model.clone(), window, cx);
-        });
+        let model_rows = Self::build_model_rows(&settings, window, cx);
 
         let theme_names = Self::theme_names(cx);
         let selected_theme_index = Self::selected_theme_index(&theme_names, &settings.theme_name);
@@ -87,8 +222,8 @@ impl SettingsView {
             state: state.clone(),
             provider_input,
             api_key_input,
-            base_url_input,
-            model_input,
+            endpoint_input,
+            model_rows,
             theme_preset_select,
             theme_mode: settings.theme_mode,
             error_message: None,
@@ -96,7 +231,7 @@ impl SettingsView {
     }
 
     pub fn reload_from_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = self.state.read(cx).settings().clone();
+        let settings = self.state.read(cx).settings();
 
         self.provider_input.update(cx, |input_state, cx| {
             input_state.set_value(settings.provider_id.clone(), window, cx);
@@ -104,12 +239,10 @@ impl SettingsView {
         self.api_key_input.update(cx, |input_state, cx| {
             input_state.set_value(settings.api_key.clone(), window, cx);
         });
-        self.base_url_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.base_url.clone(), window, cx);
+        self.endpoint_input.update(cx, |input_state, cx| {
+            input_state.set_value(settings.endpoint.clone(), window, cx);
         });
-        self.model_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.default_model.clone(), window, cx);
-        });
+        self.model_rows = Self::build_model_rows(&settings, window, cx);
         self.theme_preset_select.update(cx, |select_state, cx| {
             let theme_names = Self::theme_names(cx);
             let selected_theme_index =
@@ -119,6 +252,29 @@ impl SettingsView {
         });
         self.theme_mode = settings.theme_mode;
         self.error_message = None;
+    }
+
+    fn add_model_row(
+        &mut self,
+        _event: &gpui::ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.model_rows
+            .push(Self::new_model_row(&ModelSettings::default(), window, cx));
+        self.error_message = None;
+        cx.notify();
+    }
+
+    fn remove_model_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.model_rows.len() <= 1 {
+            self.model_rows[0] = Self::new_model_row(&ModelSettings::default(), window, cx);
+        } else if index < self.model_rows.len() {
+            self.model_rows.remove(index);
+        }
+
+        self.error_message = None;
+        cx.notify();
     }
 
     fn select_light_mode(
@@ -149,8 +305,7 @@ impl SettingsView {
     ) {
         let provider_id = self.provider_input.read(cx).value().to_string();
         let api_key = self.api_key_input.read(cx).value().to_string();
-        let base_url = self.base_url_input.read(cx).value().to_string();
-        let default_model = self.model_input.read(cx).value().to_string();
+        let endpoint = self.endpoint_input.read(cx).value().to_string();
         let theme_name = self
             .theme_preset_select
             .read(cx)
@@ -158,19 +313,24 @@ impl SettingsView {
             .map(|theme_name| theme_name.to_string())
             .unwrap_or_default();
 
+        let models = match self.collect_models(cx) {
+            Ok(models) => models,
+            Err(error) => {
+                self.error_message = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+
         let new_settings = ProviderSettings {
             provider_id: provider_id.trim().to_string(),
             api_key: api_key.trim().to_string(),
-            base_url: if base_url.trim().is_empty() {
-                crate::settings::state::DEFAULT_BASE_URL.to_string()
+            endpoint: if endpoint.trim().is_empty() {
+                crate::settings::state::DEFAULT_ENDPOINT.to_string()
             } else {
-                base_url.trim().to_string()
+                endpoint.trim().to_string()
             },
-            default_model: if default_model.trim().is_empty() {
-                crate::llm::DEFAULT_OPENAI_MODEL.to_string()
-            } else {
-                default_model.trim().to_string()
-            },
+            models,
             theme_mode: self.theme_mode,
             theme_name: theme_name.trim().to_string(),
         };
@@ -184,8 +344,8 @@ impl SettingsView {
                 cx.emit(SettingsClose);
                 cx.notify();
             }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to save settings: {e}"));
+            Err(error) => {
+                self.error_message = Some(format!("Failed to save settings: {error}"));
                 cx.notify();
             }
         }
@@ -201,10 +361,11 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let can_remove_rows = self.model_rows.len() > 1;
 
         v_flex()
             .id("settings-view")
-            .w(px(400.))
+            .w(px(700.))
             .gap_4()
             .p_4()
             .bg(theme.popover)
@@ -251,18 +412,125 @@ impl Render for SettingsView {
                                     .text_color(theme.foreground)
                                     .child("Endpoint"),
                             )
-                            .child(Input::new(&self.base_url_input).w_full()),
+                            .child(Input::new(&self.endpoint_input).w_full()),
                     )
                     .child(
                         v_flex()
-                            .gap_1()
+                            .gap_2()
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child("Default Model"),
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child("Models"),
+                                    )
+                                    .child(
+                                        Button::new("settings-add-model")
+                                            .ghost()
+                                            .small()
+                                            .child("Add Model")
+                                            .on_click(cx.listener(Self::add_model_row)),
+                                    ),
                             )
-                            .child(Input::new(&self.model_input).w_full()),
+                            .children(self.model_rows.iter().enumerate().map(|(index, row)| {
+                                let model_name_input = row.model_name_input.clone();
+                                let max_completion_tokens_input =
+                                    row.max_completion_tokens_input.clone();
+                                let max_output_tokens_input = row.max_output_tokens_input.clone();
+                                let max_tokens_input = row.max_tokens_input.clone();
+
+                                v_flex()
+                                    .id(("settings-model-row", index))
+                                    .gap_2()
+                                    .p_3()
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .rounded_md()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(format!("Model #{}", index + 1)),
+                                            )
+                                            .when(can_remove_rows, |row_header| {
+                                                row_header.child(
+                                                    Button::new(("settings-remove-model", index))
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .child("Remove")
+                                                        .on_click(cx.listener(
+                                                            move |this, _event, window, cx| {
+                                                                this.remove_model_row(
+                                                                    index, window, cx,
+                                                                );
+                                                            },
+                                                        )),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.foreground)
+                                                    .child("model_name"),
+                                            )
+                                            .child(Input::new(&model_name_input).w_full()),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .gap_2()
+                                            .child(
+                                                v_flex()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(theme.foreground)
+                                                            .child("max_completion_tokens"),
+                                                    )
+                                                    .child(
+                                                        Input::new(&max_completion_tokens_input)
+                                                            .w_full(),
+                                                    ),
+                                            )
+                                            .child(
+                                                v_flex()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(theme.foreground)
+                                                            .child("max_output_tokens"),
+                                                    )
+                                                    .child(
+                                                        Input::new(&max_output_tokens_input)
+                                                            .w_full(),
+                                                    ),
+                                            )
+                                            .child(
+                                                v_flex()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(theme.foreground)
+                                                            .child("max_tokens"),
+                                                    )
+                                                    .child(Input::new(&max_tokens_input).w_full()),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            })),
                     )
                     .child(
                         v_flex()

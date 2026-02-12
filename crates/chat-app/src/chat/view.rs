@@ -4,11 +4,7 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{
-    ActiveTheme, Sizable,
-    button::{Button, ButtonVariants},
-    h_flex, v_flex,
-};
+use gpui_component::{h_flex, v_flex, ActiveTheme};
 use gpui_tokio_bridge::Tokio;
 
 use crate::chat::events::{ConversationSelected, Stop, Submit};
@@ -16,7 +12,10 @@ use crate::chat::message::{
     Conversation, ConversationId, Message, MessageId, MessageStatus, Role, StreamSessionId,
     StreamTarget,
 };
-use crate::chat::{ChatSidebar, MessageInput, MessageList, StreamEventMapped, StreamEventPayload};
+use crate::chat::{
+    ChatSidebar, MessageInput, MessageList, SidebarSettingsClicked, SidebarToggleClicked,
+    StreamEventMapped, StreamEventPayload,
+};
 use crate::llm::{
     DEFAULT_OPENAI_MODEL, LlmProvider, ProviderConfig, ProviderEventStream, ProviderMessage,
     ProviderStreamHandle, ProviderWorker, StreamRequest, create_provider,
@@ -39,7 +38,7 @@ pub struct ChatView {
     message_list: Entity<MessageList>,
     message_input: Entity<MessageInput>,
     model_selector: Entity<ModelSelector>,
-    _settings_state: Entity<SettingsState>,
+    settings_state: Entity<SettingsState>,
     settings_view: Entity<SettingsView>,
     settings_open: bool,
     provider: Option<Arc<dyn LlmProvider>>,
@@ -56,12 +55,15 @@ pub struct ChatView {
     provider_error: Option<String>,
 }
 
+impl EventEmitter<SidebarToggleClicked> for ChatView {}
+
 impl ChatView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sidebar = cx.new(|cx| ChatSidebar::new(window, cx));
         let message_list = cx.new(MessageList::new);
         let message_input = cx.new(|cx| MessageInput::new(window, cx));
         let settings_state = SettingsState::new(cx);
+        let initial_settings = settings_state.read(cx).settings();
 
         let mut conversations = HashMap::new();
         for record in sidebar.read(cx).conversations().iter().cloned() {
@@ -104,7 +106,8 @@ impl ChatView {
 
         let model_selector = cx.new(|_| ModelSelector::new(&current_model_id));
         model_selector.update(cx, |selector, cx| {
-            selector.set_provider(provider.clone(), cx);
+            selector.set_models(initial_settings.configured_models(), cx);
+            selector.set_model_id(current_model_id.clone(), cx);
         });
 
         let settings_view = cx.new(|cx| SettingsView::new(&settings_state, window, cx));
@@ -114,7 +117,7 @@ impl ChatView {
             message_list: message_list.clone(),
             message_input: message_input.clone(),
             model_selector: model_selector.clone(),
-            _settings_state: settings_state.clone(),
+            settings_state: settings_state.clone(),
             settings_view: settings_view.clone(),
             settings_open: false,
             provider,
@@ -137,6 +140,16 @@ impl ChatView {
 
         cx.subscribe(&sidebar, |this, _, event: &ConversationSelected, cx| {
             this.handle_conversation_selected(*event, cx);
+        })
+        .detach();
+
+        cx.subscribe(&sidebar, |this, _, _event: &SidebarSettingsClicked, cx| {
+            this.open_settings(cx);
+        })
+        .detach();
+
+        cx.subscribe(&sidebar, |_, _, _event: &SidebarToggleClicked, cx| {
+            cx.emit(SidebarToggleClicked);
         })
         .detach();
 
@@ -186,21 +199,16 @@ impl ChatView {
             .update(cx, |sidebar, cx| sidebar.create_conversation(cx));
     }
 
+    pub fn open_settings_panel(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(cx);
+    }
+
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         if self.settings_open {
             return;
         }
         self.settings_open = true;
         cx.notify();
-    }
-
-    fn open_settings_click(
-        &mut self,
-        _event: &gpui::ClickEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_settings(cx);
     }
 
     fn close_settings(&mut self, cx: &mut Context<Self>) {
@@ -216,15 +224,18 @@ impl ChatView {
         event.settings.apply_theme(None, cx);
         cx.refresh_windows();
 
+        let model_id = event.settings.default_model_name();
+        let available_models = event.settings.configured_models();
+
         match Self::create_provider_from_settings(&event.settings) {
-            Ok((provider, model_id)) => {
+            Ok((provider, _)) => {
                 self.provider = provider.clone();
                 self.current_model_id = model_id.clone();
                 self.provider_error = None;
 
                 self.model_selector.update(cx, |selector, cx| {
-                    selector.set_provider(provider, cx);
-                    selector.set_model_id(model_id, cx);
+                    selector.set_models(available_models.clone(), cx);
+                    selector.set_model_id(model_id.clone(), cx);
                 });
 
                 tracing::info!("reloaded provider adapter with new settings");
@@ -232,8 +243,10 @@ impl ChatView {
             Err(error) => {
                 self.provider = None;
                 self.provider_error = Some(format!("{}", error));
+                self.current_model_id = model_id.clone();
                 self.model_selector.update(cx, |selector, cx| {
-                    selector.set_provider(None, cx);
+                    selector.set_models(available_models.clone(), cx);
+                    selector.set_model_id(model_id.clone(), cx);
                 });
                 tracing::error!("failed to reload provider adapter: {}", error);
             }
@@ -251,7 +264,8 @@ impl ChatView {
         settings_state: &Entity<SettingsState>,
         cx: &mut Context<Self>,
     ) -> (Option<Arc<dyn LlmProvider>>, String, Option<String>) {
-        let settings = settings_state.read(cx).settings().clone();
+        let settings = settings_state.read(cx).settings();
+        let default_model_from_settings = settings.default_model_name();
 
         if settings.is_valid() {
             match Self::create_provider_from_settings(&settings) {
@@ -268,23 +282,26 @@ impl ChatView {
             }
         }
 
-        Self::provider_from_environment()
+        let (provider, environment_model_id, provider_error) = Self::provider_from_environment();
+        if provider.is_some() {
+            (provider, environment_model_id, provider_error)
+        } else {
+            (provider, default_model_from_settings, provider_error)
+        }
     }
 
     fn create_provider_from_settings(
         settings: &crate::settings::state::ProviderSettings,
     ) -> Result<(Option<Arc<dyn LlmProvider>>, String), crate::llm::ProviderError> {
         let config = settings.to_provider_config();
+        let model_id = settings.default_model_name();
 
         let Some(config) = config else {
-            return Ok((None, DEFAULT_OPENAI_MODEL.to_string()));
+            return Ok((None, model_id));
         };
 
         match create_provider(config) {
-            Ok(provider) => {
-                let model_id = provider.default_model().to_string();
-                Ok((Some(provider), model_id))
-            }
+            Ok(provider) => Ok((Some(provider), model_id)),
             Err(error) => Err(error),
         }
     }
@@ -299,28 +316,22 @@ impl ChatView {
             return (None, DEFAULT_OPENAI_MODEL.to_string(), None);
         };
 
-        let default_model = std::env::var("OPENAI_MODEL")
+        let model_id = std::env::var("OPENAI_MODEL")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string());
 
-        let base_url = std::env::var("OPENAI_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+        let endpoint = std::env::var("OPENAI_BASE_URL")
+            .unwrap_or_else(|_| crate::settings::state::DEFAULT_ENDPOINT.to_string());
 
-        let config = ProviderConfig::new("openai", api_key, base_url, default_model);
+        let config = ProviderConfig::new("openai", api_key, endpoint);
 
         match create_provider(config) {
-            Ok(provider) => {
-                let model_id = provider.default_model().to_string();
-                (Some(provider), model_id, None)
-            }
+            Ok(provider) => (Some(provider), model_id, None),
             Err(error) => {
                 tracing::error!("failed to initialize provider adapter: {error}");
-                (
-                    None,
-                    DEFAULT_OPENAI_MODEL.to_string(),
-                    Some(format!("Provider error: {}", error)),
-                )
+                (None, model_id, Some(format!("Provider error: {}", error)))
             }
         }
     }
@@ -423,11 +434,21 @@ impl ChatView {
         // Reserve the next session id immediately so follow-up submissions never reuse a target.
         self.next_stream_session_id = self.next_stream_session_id.saturating_add(1);
 
-        let request = StreamRequest::new(
+        let configured_max_tokens = self
+            .settings_state
+            .read(cx)
+            .settings()
+            .model_max_tokens(&self.current_model_id);
+
+        let mut request = StreamRequest::new(
             event.target,
             self.current_model_id.clone(),
             request_messages,
         );
+        if let Some(max_tokens) = configured_max_tokens {
+            request = request.with_max_tokens(max_tokens);
+        }
+
         let stream_result = self
             .provider
             .as_ref()
@@ -780,6 +801,12 @@ impl ChatView {
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let configured_provider_id = self.settings_state.read(cx).settings().provider_id.clone();
+        let provider_id = if configured_provider_id.trim().is_empty() {
+            "openai".to_string()
+        } else {
+            configured_provider_id.trim().to_string()
+        };
 
         v_flex()
             .id("chat-view")
@@ -789,12 +816,38 @@ impl Render for ChatView {
             .overflow_hidden()
             .bg(theme.background)
             .child(
+                v_flex()
+                    .id("chat-view-content")
+                    .size_full()
+                    .min_h_0()
+                    .pt(px(48.))
+                    .child(
+                        div()
+                            .id("chat-view-message-list")
+                            .flex_1()
+                            .min_h_0()
+                            .child(self.message_list.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("chat-view-message-input")
+                            .flex_shrink_0()
+                            .w_full()
+                            .child(self.message_input.clone()),
+                    ),
+            )
+            .child(
                 h_flex()
                     .id("chat-view-header")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
                     .h(px(48.))
                     .px_4()
                     .items_center()
                     .justify_between()
+                    .bg(theme.background)
                     .border_b_1()
                     .border_color(theme.border)
                     .child(
@@ -808,29 +861,21 @@ impl Render for ChatView {
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(self.model_selector.clone())
                             .child(
-                                Button::new("chat-view-settings")
-                                    .ghost()
-                                    .small()
-                                    .child("Settings")
-                                    .on_click(cx.listener(Self::open_settings_click)),
-                            ),
+                                div()
+                                    .id("chat-view-provider-id")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_full()
+                                    .bg(theme.muted)
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(provider_id),
+                            )
+                            .child(self.model_selector.clone()),
                     ),
-            )
-            .child(
-                div()
-                    .id("chat-view-message-list")
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.message_list.clone()),
-            )
-            .child(
-                div()
-                    .id("chat-view-message-input")
-                    .flex_shrink_0()
-                    .w_full()
-                    .child(self.message_input.clone()),
             )
             .when(self.settings_open, |el| {
                 el.child(

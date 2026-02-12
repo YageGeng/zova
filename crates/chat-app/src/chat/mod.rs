@@ -18,5 +18,5 @@ pub use message::{
 pub use message_input::MessageInput;
 pub use message_list::MessageList;
 pub use scroll_manager::ScrollManager;
-pub use sidebar::ChatSidebar;
+pub use sidebar::{ChatSidebar, SidebarSettingsClicked, SidebarToggleClicked};
 pub use view::ChatView;
