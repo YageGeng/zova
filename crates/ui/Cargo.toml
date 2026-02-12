@@ -1,6 +1,6 @@
 [package]
 edition = "2024"
-name = "zova"
+name = "ui"
 publish = false
 version = "0.1.0"
 
@@ -16,10 +16,13 @@ gpui-tokio-bridge.workspace = true
 rig-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
+zova-storage = { path = "../storage" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-text.workspace = true

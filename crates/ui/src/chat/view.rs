@@ -22,6 +22,7 @@ use crate::llm::{
 };
 use crate::model_selector::{ModelSelected, ModelSelector, ModelSelectorSettingsClicked};
 use crate::settings::{SettingsChanged, SettingsClose, SettingsState, SettingsView};
+use zova_storage::{MessageId as StorageMessageId, MessageRole as StorageMessageRole};
 
 pub const STREAM_DEBOUNCE_MS: u64 = 50;
 
@@ -44,6 +45,7 @@ pub struct ChatView {
     provider: Option<Arc<dyn LlmProvider>>,
     current_model_id: String,
     conversations: HashMap<ConversationId, Conversation>,
+    storage_message_ids: HashMap<ConversationId, HashMap<MessageId, StorageMessageId>>,
     active_conversation_id: Option<ConversationId>,
     next_message_id: u64,
     next_stream_session_id: u64,
@@ -123,6 +125,7 @@ impl ChatView {
             provider,
             current_model_id,
             conversations,
+            storage_message_ids: HashMap::new(),
             active_conversation_id: None,
             next_message_id: 1,
             next_stream_session_id: 1,
@@ -355,6 +358,7 @@ impl ChatView {
 
     fn activate_conversation(&mut self, conversation_id: ConversationId, cx: &mut Context<Self>) {
         self.ensure_conversation_exists(conversation_id, cx);
+        self.hydrate_conversation_messages(conversation_id, cx);
         self.active_conversation_id = Some(conversation_id);
 
         self.message_input.update(cx, |input, cx| {
@@ -416,6 +420,22 @@ impl ChatView {
 
             Self::build_provider_messages(conversation)
         };
+
+        // Persist user/assistant inserts after transition acceptance to keep stream lifecycle ordering unchanged.
+        self.persist_inserted_message(
+            active_conversation_id,
+            user_message_id,
+            Role::User,
+            event.content.clone(),
+            cx,
+        );
+        self.persist_inserted_message(
+            active_conversation_id,
+            assistant_message_id,
+            Role::Assistant,
+            String::new(),
+            cx,
+        );
 
         self.active_stream = Some(ActiveStream {
             target: event.target,
@@ -577,12 +597,24 @@ impl ChatView {
             return;
         };
 
+        let mut persisted_assistant_content = None;
+
         if let Some(message) = conversation
             .messages
             .iter_mut()
             .find(|message| message.id == active_stream.assistant_message_id)
         {
             message.content.push_str(&chunk);
+            persisted_assistant_content = Some(message.content.clone());
+        }
+
+        if let Some(content) = persisted_assistant_content {
+            self.persist_updated_message(
+                active_stream.target.conversation_id,
+                active_stream.assistant_message_id,
+                content,
+                cx,
+            );
         }
 
         if self.active_conversation_id == Some(active_stream.target.conversation_id) {
@@ -666,6 +698,8 @@ impl ChatView {
         self.stream_debounce_task = None;
         self.stream_worker_task = None;
 
+        let mut persisted_assistant_content = None;
+
         if let Some(conversation) = self.conversations.get_mut(&target.conversation_id) {
             let _ = conversation.apply_stream_transition(transition);
 
@@ -675,7 +709,17 @@ impl ChatView {
                 .find(|message| message.id == active_stream.assistant_message_id)
             {
                 message.status = final_status;
+                persisted_assistant_content = Some(message.content.clone());
             }
+        }
+
+        if let Some(content) = persisted_assistant_content {
+            self.persist_updated_message(
+                target.conversation_id,
+                active_stream.assistant_message_id,
+                content,
+                cx,
+            );
         }
 
         self.active_stream = None;
@@ -727,10 +771,6 @@ impl ChatView {
         conversation_id: ConversationId,
         cx: &mut Context<Self>,
     ) {
-        if self.conversations.contains_key(&conversation_id) {
-            return;
-        }
-
         let title = self
             .sidebar
             .read(cx)
@@ -738,8 +778,83 @@ impl ChatView {
             .map(|record| record.title)
             .unwrap_or_else(|| format!("Conversation {}", conversation_id.0));
 
+        if let Some(conversation) = self.conversations.get_mut(&conversation_id) {
+            conversation.title = title;
+            return;
+        }
+
         self.conversations
             .insert(conversation_id, Conversation::new(conversation_id, title));
+    }
+
+    fn hydrate_conversation_messages(&mut self, conversation_id: ConversationId, cx: &mut Context<Self>) {
+        let persisted_messages = self.sidebar.read(cx).list_persisted_messages(conversation_id);
+        let mut hydrated_messages = Vec::with_capacity(persisted_messages.len());
+        let mut storage_message_ids = HashMap::with_capacity(persisted_messages.len());
+
+        // Keep a deterministic in-memory<->storage ID bridge so stream updates can scope writes.
+        for persisted_message in persisted_messages {
+            let message_id = self.alloc_message_id();
+            storage_message_ids.insert(message_id, persisted_message.id);
+            hydrated_messages.push(Message::new(
+                message_id,
+                storage_role_to_chat(persisted_message.role),
+                persisted_message.content,
+                MessageStatus::Done,
+            ));
+        }
+
+        if let Some(conversation) = self.conversations.get_mut(&conversation_id) {
+            conversation.messages = hydrated_messages;
+        }
+        self.storage_message_ids
+            .insert(conversation_id, storage_message_ids);
+    }
+
+    fn persist_inserted_message(
+        &mut self,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        role: Role,
+        content: String,
+        cx: &mut Context<Self>,
+    ) {
+        let persisted_message = self
+            .sidebar
+            .read(cx)
+            .append_persisted_message(conversation_id, role, content);
+        if let Some(persisted_message) = persisted_message {
+            self.storage_message_ids
+                .entry(conversation_id)
+                .or_default()
+                .insert(message_id, persisted_message.id);
+        }
+    }
+
+    fn persist_updated_message(
+        &mut self,
+        conversation_id: ConversationId,
+        message_id: MessageId,
+        content: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(storage_message_id) = self
+            .storage_message_ids
+            .get(&conversation_id)
+            .and_then(|message_ids| message_ids.get(&message_id))
+            .copied()
+        else {
+            tracing::warn!(
+                "missing persisted message mapping for conversation={conversation_id:?}, message={message_id:?}"
+            );
+            return;
+        };
+
+        let _ = self.sidebar.read(cx).update_persisted_message_content(
+            conversation_id,
+            storage_message_id,
+            content,
+        );
     }
 
     fn build_provider_messages(conversation: &Conversation) -> Vec<ProviderMessage> {
@@ -768,6 +883,7 @@ impl ChatView {
         } else {
             "Provider is not configured. Please set API key in settings.".to_string()
         };
+        let persisted_error_text = error_text.clone();
 
         if let Some(conversation) = self.conversations.get_mut(&conversation_id) {
             conversation.messages.push(Message::new(
@@ -777,6 +893,14 @@ impl ChatView {
                 MessageStatus::Error("Provider not configured".to_string()),
             ));
         }
+
+        self.persist_inserted_message(
+            conversation_id,
+            message_id,
+            Role::Assistant,
+            persisted_error_text,
+            cx,
+        );
 
         self.sync_active_conversation_messages(cx, false);
         cx.notify();
@@ -795,6 +919,14 @@ impl ChatView {
         let id = MessageId::new(self.next_message_id);
         self.next_message_id = self.next_message_id.saturating_add(1);
         id
+    }
+}
+
+fn storage_role_to_chat(role: StorageMessageRole) -> Role {
+    match role {
+        StorageMessageRole::System => Role::System,
+        StorageMessageRole::User => Role::User,
+        StorageMessageRole::Assistant => Role::Assistant,
     }
 }
 

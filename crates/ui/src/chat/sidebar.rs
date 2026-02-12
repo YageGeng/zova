@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::*;
@@ -12,12 +14,18 @@ use gpui_component::{
 };
 
 use crate::chat::events::ConversationSelected;
-use crate::chat::message::ConversationId;
-use crate::database::{ConversationRecord, ConversationStore, DEFAULT_CONVERSATION_TITLE};
+use crate::chat::message::{ConversationId, Role};
+use crate::database::{ConversationRecord, DEFAULT_CONVERSATION_TITLE};
+use zova_storage::{
+    MessageId as StorageMessageId, MessagePatch, MessageRecord as StorageMessageRecord,
+    MessageRole as StorageMessageRole, MessageStore, NewMessage, NewSession, SessionId,
+    SessionStore, SqliteStorage,
+};
 
 const GROUP_HEADER_HEIGHT: f32 = 26.0;
 const CONVERSATION_ROW_HEIGHT: f32 = 40.0;
 const DAY_SECONDS: u64 = 60 * 60 * 24;
+const DEFAULT_STORAGE_DB_RELATIVE_PATH: &str = ".zova/storage.db";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConversationAgeGroup {
@@ -40,7 +48,10 @@ pub struct ChatSidebar {
     flat_items: Vec<SidebarListItem>,
     item_sizes: Rc<Vec<Size<Pixels>>>,
     scroll_handle: VirtualListScrollHandle,
-    conversation_store: ConversationStore,
+    storage: Option<Arc<SqliteStorage>>,
+    conversation_to_session: HashMap<ConversationId, SessionId>,
+    session_to_conversation: HashMap<SessionId, ConversationId>,
+    next_conversation_id: u64,
 }
 
 impl EventEmitter<ConversationSelected> for ChatSidebar {}
@@ -59,14 +70,7 @@ impl ChatSidebar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations..."));
-        let conversation_store = ConversationStore::default();
-        let conversations = match conversation_store.list_conversations() {
-            Ok(conversations) => conversations,
-            Err(error) => {
-                tracing::error!("failed to load conversations from store: {error}");
-                Vec::new()
-            }
-        };
+        let storage = Self::open_storage();
 
         cx.subscribe_in(
             &search_input,
@@ -82,14 +86,17 @@ impl ChatSidebar {
         let mut sidebar = Self {
             search_input,
             search_query: String::new(),
-            conversations,
+            conversations: Vec::new(),
             selected_conversation: None,
             flat_items: Vec::new(),
             item_sizes: Rc::new(Vec::new()),
             scroll_handle: VirtualListScrollHandle::new(),
-            conversation_store,
+            storage,
+            conversation_to_session: HashMap::new(),
+            session_to_conversation: HashMap::new(),
+            next_conversation_id: 1,
         };
-        sidebar.rebuild_flat_items();
+        sidebar.refresh_from_store();
         sidebar
     }
 
@@ -101,16 +108,27 @@ impl ChatSidebar {
         &self.conversations
     }
 
+    pub fn session_id_for_conversation(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Option<SessionId> {
+        self.conversation_to_session.get(&conversation_id).copied()
+    }
+
     pub fn reload_from_persistence(&mut self, cx: &mut Context<Self>) {
         self.refresh_from_store();
         cx.notify();
     }
 
     pub fn create_conversation(&mut self, cx: &mut Context<Self>) -> Option<ConversationId> {
-        let created = match self
-            .conversation_store
-            .create_conversation(DEFAULT_CONVERSATION_TITLE)
-        {
+        let Some(storage) = self.storage.as_ref() else {
+            tracing::error!("cannot create conversation because storage is unavailable");
+            return None;
+        };
+
+        let created = match storage.create_session(NewSession {
+            title: DEFAULT_CONVERSATION_TITLE.to_string(),
+        }) {
             Ok(created) => created,
             Err(error) => {
                 tracing::error!("failed to create conversation in store: {error}");
@@ -118,16 +136,117 @@ impl ChatSidebar {
             }
         };
 
+        // Keep conversation/session IDs stable for this process so stream targets stay deterministic.
+        let conversation_id = if let Some(existing) = self.session_to_conversation.get(&created.id)
+        {
+            *existing
+        } else {
+            let allocated = self.alloc_conversation_id();
+            self.session_to_conversation.insert(created.id, allocated);
+            self.conversation_to_session.insert(allocated, created.id);
+            allocated
+        };
+
         self.refresh_from_store();
-        self.select_conversation(created.id, cx);
-        Some(created.id)
+        self.select_conversation(conversation_id, cx);
+        Some(conversation_id)
     }
 
     pub fn load_conversation(&self, conversation_id: ConversationId) -> Option<ConversationRecord> {
-        match self.conversation_store.load_conversation(conversation_id) {
-            Ok(conversation) => conversation,
+        let storage = self.storage.as_ref()?;
+        let session_id = self.session_id_for_conversation(conversation_id)?;
+
+        match storage.get_session(session_id) {
+            Ok(Some(session)) => Some(ConversationRecord::new(
+                conversation_id,
+                session.title,
+                session.updated_at_unix_seconds,
+            )),
+            Ok(None) => None,
             Err(error) => {
                 tracing::error!("failed to load conversation {conversation_id:?}: {error}");
+                None
+            }
+        }
+    }
+
+    pub fn list_persisted_messages(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Vec<StorageMessageRecord> {
+        let Some(storage) = self.storage.as_ref() else {
+            return Vec::new();
+        };
+        let Some(session_id) = self.session_id_for_conversation(conversation_id) else {
+            tracing::warn!("missing session mapping for conversation {conversation_id:?}");
+            return Vec::new();
+        };
+
+        match storage.list_messages(session_id) {
+            Ok(messages) => messages,
+            Err(error) => {
+                tracing::error!(
+                    "failed to list persisted messages for {conversation_id:?}: {error}"
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn append_persisted_message(
+        &self,
+        conversation_id: ConversationId,
+        role: Role,
+        content: String,
+    ) -> Option<StorageMessageRecord> {
+        let storage = self.storage.as_ref()?;
+        let Some(session_id) = self.session_id_for_conversation(conversation_id) else {
+            tracing::warn!("missing session mapping for conversation {conversation_id:?}");
+            return None;
+        };
+
+        match storage.append_message(
+            session_id,
+            NewMessage {
+                role: chat_role_to_storage(role),
+                content,
+            },
+        ) {
+            Ok(message) => Some(message),
+            Err(error) => {
+                tracing::error!(
+                    "failed to append persisted message for {conversation_id:?}: {error}"
+                );
+                None
+            }
+        }
+    }
+
+    pub fn update_persisted_message_content(
+        &self,
+        conversation_id: ConversationId,
+        message_id: StorageMessageId,
+        content: String,
+    ) -> Option<StorageMessageRecord> {
+        let storage = self.storage.as_ref()?;
+        let Some(session_id) = self.session_id_for_conversation(conversation_id) else {
+            tracing::warn!("missing session mapping for conversation {conversation_id:?}");
+            return None;
+        };
+
+        // All message mutations stay scoped by (session_id, msg_id) to prevent cross-session writes.
+        match storage.update_message(
+            session_id,
+            message_id,
+            MessagePatch {
+                content: Some(content),
+            },
+        ) {
+            Ok(message) => Some(message),
+            Err(error) => {
+                tracing::error!(
+                    "failed to update persisted message {message_id} for {conversation_id:?}: {error}"
+                );
                 None
             }
         }
@@ -140,9 +259,42 @@ impl ChatSidebar {
     }
 
     fn refresh_from_store(&mut self) {
-        match self.conversation_store.list_conversations() {
-            Ok(conversations) => {
+        let Some(storage) = self.storage.as_ref() else {
+            tracing::error!("storage unavailable while refreshing sidebar");
+            self.conversations.clear();
+            self.conversation_to_session.clear();
+            self.session_to_conversation.clear();
+            self.selected_conversation = None;
+            self.rebuild_flat_items();
+            return;
+        };
+
+        match storage.list_sessions(false) {
+            Ok(sessions) => {
+                let mut conversations = Vec::with_capacity(sessions.len());
+                let mut conversation_to_session = HashMap::with_capacity(sessions.len());
+                let mut session_to_conversation = HashMap::with_capacity(sessions.len());
+
+                for session in sessions {
+                    let conversation_id =
+                        if let Some(existing) = self.session_to_conversation.get(&session.id) {
+                            *existing
+                        } else {
+                            self.alloc_conversation_id()
+                        };
+
+                    conversation_to_session.insert(conversation_id, session.id);
+                    session_to_conversation.insert(session.id, conversation_id);
+                    conversations.push(ConversationRecord::new(
+                        conversation_id,
+                        session.title,
+                        session.updated_at_unix_seconds,
+                    ));
+                }
+
                 self.conversations = conversations;
+                self.conversation_to_session = conversation_to_session;
+                self.session_to_conversation = session_to_conversation;
 
                 if self.selected_conversation.is_some_and(|selected| {
                     !self
@@ -158,10 +310,60 @@ impl ChatSidebar {
             Err(error) => {
                 tracing::error!("failed to refresh conversations from store: {error}");
                 self.conversations.clear();
+                self.conversation_to_session.clear();
+                self.session_to_conversation.clear();
                 self.selected_conversation = None;
                 self.rebuild_flat_items();
             }
         }
+    }
+
+    fn alloc_conversation_id(&mut self) -> ConversationId {
+        let next = ConversationId::new(self.next_conversation_id);
+        self.next_conversation_id = self.next_conversation_id.saturating_add(1);
+        next
+    }
+
+    fn open_storage() -> Option<Arc<SqliteStorage>> {
+        // Sidebar constructor is sync, so storage bootstrap runs in a local current-thread runtime.
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                tracing::error!("failed to initialize runtime for sqlite storage: {error}");
+                return None;
+            }
+        };
+
+        let storage = match runtime.block_on(SqliteStorage::open(DEFAULT_STORAGE_DB_RELATIVE_PATH))
+        {
+            Ok(storage) => storage,
+            Err(error) => {
+                tracing::error!("failed to open sqlite storage: {error}");
+                return None;
+            }
+        };
+
+        match storage.import_legacy_conversations_from_default_path() {
+            Ok(report) if report.source_missing => {
+                tracing::debug!("legacy conversation TSV not found; skipping import");
+            }
+            Ok(report) if report.imported_sessions > 0 || report.skipped_rows > 0 => {
+                tracing::info!(
+                    "legacy import complete: imported_sessions={}, skipped_rows={}",
+                    report.imported_sessions,
+                    report.skipped_rows
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!("failed to import legacy conversations into sqlite: {error}");
+            }
+        }
+
+        Some(Arc::new(storage))
     }
 
     fn rebuild_flat_items(&mut self) {
@@ -449,4 +651,12 @@ fn unix_now_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0))
         .as_secs()
+}
+
+fn chat_role_to_storage(role: Role) -> StorageMessageRole {
+    match role {
+        Role::System => StorageMessageRole::System,
+        Role::User => StorageMessageRole::User,
+        Role::Assistant => StorageMessageRole::Assistant,
+    }
 }

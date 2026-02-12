@@ -13,7 +13,6 @@ pub mod llm;
 pub mod model_selector;
 /// Settings persistence and UI.
 pub mod settings;
-
 /// Returns a stable marker used by integration smoke tests.
 pub fn smoke_marker() -> &'static str {
     "zova"

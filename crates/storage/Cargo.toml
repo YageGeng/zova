@@ -1,0 +1,11 @@
+[package]
+edition = "2024"
+name = "zova-storage"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+sqlx.workspace = true
+snafu.workspace = true
+tokio.workspace = true
+uuid.workspace = true
