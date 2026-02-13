@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, VirtualListScrollHandle,
+    ActiveTheme, IconName, Sizable, VirtualListScrollHandle,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -535,60 +535,6 @@ impl ChatSidebar {
             )
             .into_any_element()
     }
-
-    fn render_footer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        h_flex()
-            .w_full()
-            .min_w_0()
-            .items_center()
-            .justify_between()
-            .px_3()
-            .py_2()
-            .border_t_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .id("sidebar-user-center")
-                    .size(px(32.))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        Icon::new(IconName::CircleUser)
-                            .size(px(18.))
-                            .text_color(theme.foreground),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Button::new("sidebar-settings")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Settings)
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.emit(SidebarSettingsClicked);
-                            })),
-                    )
-                    .child(
-                        Button::new("sidebar-toggle")
-                            .ghost()
-                            .small()
-                            .icon(IconName::PanelLeftClose)
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.emit(SidebarToggleClicked);
-                            })),
-                    ),
-            )
-    }
 }
 
 impl Render for ChatSidebar {
@@ -602,7 +548,6 @@ impl Render for ChatSidebar {
             .bg(theme.background)
             .child(self.render_toolbar(cx))
             .child(self.render_history_list(cx))
-            .child(self.render_footer(cx))
     }
 }
 

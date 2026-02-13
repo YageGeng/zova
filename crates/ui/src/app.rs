@@ -9,7 +9,7 @@ use gpui_component::{
     h_flex, v_flex,
 };
 
-use crate::chat::{ChatSidebar, ChatView, SidebarToggleClicked};
+use crate::chat::{ChatSidebar, ChatView};
 
 /// Returns the default themes directory path.
 /// This is a pure function to allow deterministic testing of path resolution.
@@ -24,6 +24,15 @@ pub const SIDEBAR_MIN_WIDTH: f32 = 200.0;
 /// Maximum allowed sidebar width.
 pub const SIDEBAR_MAX_WIDTH: f32 = 400.0;
 pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
+const WINDOW_TOOLBAR_HEIGHT: f32 = 48.0;
+#[cfg(target_os = "macos")]
+const WINDOW_TOOLBAR_LEFT_SAFE_PADDING: f32 = 78.0;
+#[cfg(not(target_os = "macos"))]
+const WINDOW_TOOLBAR_LEFT_SAFE_PADDING: f32 = 16.0;
+#[cfg(target_os = "windows")]
+const WINDOW_TOOLBAR_RIGHT_SAFE_PADDING: f32 = 120.0;
+#[cfg(not(target_os = "windows"))]
+const WINDOW_TOOLBAR_RIGHT_SAFE_PADDING: f32 = 16.0;
 /// Compile-time validation of sidebar layout constraints.
 /// These assertions ensure the constants maintain valid relationships.
 const _: () = {
@@ -94,11 +103,6 @@ impl ChatAppShell {
     ) -> Self {
         let chat_view = cx.new(|cx| ChatView::new(window, cx));
 
-        cx.subscribe(&chat_view, |this, _, _event: &SidebarToggleClicked, cx| {
-            this.toggle_sidebar(cx);
-        })
-        .detach();
-
         Self {
             notification_list,
             chat_view,
@@ -144,38 +148,51 @@ impl Render for ChatAppShell {
             .size_full()
             .relative()
             .bg(theme.background)
-            // Main horizontal layout: sidebar + resize handle + main content
             .child(
-                h_flex()
+                v_flex()
                     .size_full()
-                    .child(self.render_sidebar(sidebar, cx))
-                    // Resize handle only visible when sidebar is expanded
-                    .when(!collapsed, |el| el.child(self.render_resize_handle(cx)))
                     .child(
-                        v_flex()
-                            .id("main-content")
+                        h_flex()
+                            .id("app-shell-body")
                             .flex_1()
-                            .h_full()
                             .min_w_0()
                             .min_h_0()
+                            .pt(px(WINDOW_TOOLBAR_HEIGHT))
                             .overflow_hidden()
-                            .child(self.chat_view.clone()),
-                    ),
+                            .child(self.render_sidebar(sidebar, cx))
+                            .when(!collapsed, |el| el.child(self.render_resize_handle(cx)))
+                            .child(
+                                v_flex()
+                                    .id("main-content")
+                                    .flex_1()
+                                    .h_full()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .child(self.chat_view.clone()),
+                            ),
+                    )
+                    .child(self.render_bottom_bar(cx)),
             )
-            // Notification layer for toast messages
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .child(self.render_top_bar(cx)),
+            )
             .child(self.notification_list.clone())
     }
 }
 
 impl ChatAppShell {
     fn render_collapsed_sidebar(&self, cx: &Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-
         v_flex()
             .id("collapsed-sidebar")
             .size_full()
             .items_center()
-            .justify_between()
+            .justify_start()
             .py_3()
             .px_2()
             .child(
@@ -189,52 +206,114 @@ impl ChatAppShell {
                         })),
                 ),
             )
+            .into_any_element()
+    }
+
+    fn render_top_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (provider_id, model_selector) = {
+            let chat_view = self.chat_view.read(cx);
+            (
+                chat_view.resolved_provider_id(cx),
+                chat_view.model_selector().clone(),
+            )
+        };
+
+        h_flex()
+            .id("app-top-bar")
+            .w_full()
+            .h(px(WINDOW_TOOLBAR_HEIGHT))
+            .flex_shrink_0()
+            .pl(px(WINDOW_TOOLBAR_LEFT_SAFE_PADDING))
+            .pr(px(WINDOW_TOOLBAR_RIGHT_SAFE_PADDING))
+            .items_center()
+            .justify_end()
+            .bg(theme.background)
+            .border_b_1()
+            .border_color(theme.border)
             .child(
-                v_flex()
-                    .items_center()
+                h_flex()
                     .gap_2()
+                    .items_center()
                     .child(
                         div()
-                            .id("collapsed-user-center")
-                            .size(px(32.))
+                            .id("chat-view-provider-id")
+                            .px_2()
+                            .py_1()
                             .rounded_full()
+                            .bg(theme.muted)
                             .border_1()
                             .border_color(theme.border)
-                            .bg(theme.muted)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::new(IconName::CircleUser)
-                                    .size(px(18.))
-                                    .text_color(theme.foreground),
-                            ),
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(provider_id),
                     )
+                    .child(model_selector),
+            )
+    }
+
+    fn render_bottom_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        h_flex()
+            .id("app-bottom-bar")
+            .w_full()
+            .flex_shrink_0()
+            .items_center()
+            .border_t_1()
+            .border_color(theme.border)
+            .child(self.render_bottom_sidebar_controls(cx))
+            .child(div().id("app-bottom-main-spacer").flex_1().min_w_0())
+    }
+
+    fn render_bottom_sidebar_controls(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        h_flex()
+            .id("app-bottom-sidebar-controls")
+            .w(px(SIDEBAR_DEFAULT_WIDTH))
+            .h_full()
+            .flex_shrink_0()
+            .items_center()
+            .justify_start()
+            .gap_1()
+            .px_3()
+            .py_1()
+            .child(
+                Button::new("sidebar-toggle")
+                    .ghost()
+                    .small()
+                    .icon(IconName::PanelLeftClose)
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.toggle_sidebar(cx);
+                    })),
+            )
+            .child(
+                Button::new("sidebar-settings")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Settings)
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.open_settings(cx);
+                    })),
+            )
+            .child(
+                div()
+                    .id("sidebar-user-center")
+                    .size(px(28.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.muted)
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .child(
-                        v_flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                Button::new("sidebar-settings-collapsed")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Settings)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.open_settings(cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("toggle-sidebar-collapsed")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::PanelLeftOpen)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.toggle_sidebar(cx);
-                                    })),
-                            ),
+                        Icon::new(IconName::CircleUser)
+                            .size(px(16.))
+                            .text_color(theme.foreground),
                     ),
             )
-            .into_any_element()
     }
 
     fn render_sidebar(&self, sidebar: Entity<ChatSidebar>, cx: &Context<Self>) -> impl IntoElement {

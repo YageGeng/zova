@@ -72,6 +72,12 @@ fn main() {
                         traffic_light_position: Some(point(px(14.), px(14.))),
                         ..Default::default()
                     }),
+                    // Match Zed-style client decorations on Linux/FreeBSD so the app draws
+                    // its own title area instead of showing a system titlebar.
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    window_decorations: Some(WindowDecorations::Client),
+                    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+                    window_decorations: None,
                     ..Default::default()
                 };
 

@@ -28,7 +28,7 @@ impl MessageInput {
             InputState::new(window, cx)
                 .placeholder("Type your message...")
                 .clean_on_escape()
-                .auto_grow(1, 10)
+                .auto_grow(3, 10)
         });
 
         cx.subscribe_in(
@@ -141,16 +141,41 @@ impl Render for MessageInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_streaming = self.is_streaming;
+        let action = if is_streaming {
+            Button::new("stop")
+                .small()
+                .danger()
+                .icon(IconName::CircleX)
+                .child("Stop")
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.handle_stop(cx);
+                }))
+                .into_any_element()
+        } else {
+            Button::new("send")
+                .small()
+                .primary()
+                .icon(IconName::ArrowUp)
+                .child("Send")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.handle_submit(window, cx);
+                }))
+                .into_any_element()
+        };
 
         v_flex()
-            .gap_2()
-            .border_t_1()
-            .border_color(theme.border)
             .bg(theme.background)
-            .p_4()
+            .gap_2()
+            .p_3()
             .child(
                 div()
                     .w_full()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.background)
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         if event.keystroke.key == "enter" && event.keystroke.modifiers.shift {
                             this.handle_shift_enter(window, cx);
@@ -162,26 +187,6 @@ impl Render for MessageInput {
                             .disabled(is_streaming),
                     ),
             )
-            .child(div().w_full().flex().justify_end().child(if is_streaming {
-                Button::new("stop")
-                    .small()
-                    .danger()
-                    .icon(IconName::CircleX)
-                    .child("Stop")
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.handle_stop(cx);
-                    }))
-                    .into_any_element()
-            } else {
-                Button::new("send")
-                    .small()
-                    .primary()
-                    .icon(IconName::ArrowUp)
-                    .child("Send")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.handle_submit(window, cx);
-                    }))
-                    .into_any_element()
-            }))
+            .child(div().w_full().flex().justify_end().child(action))
     }
 }

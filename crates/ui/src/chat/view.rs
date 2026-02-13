@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{ActiveTheme, v_flex};
 use gpui_tokio_bridge::Tokio;
 
 use crate::chat::events::{ConversationSelected, Stop, Submit};
@@ -194,6 +194,20 @@ impl ChatView {
 
     pub fn sidebar(&self) -> &Entity<ChatSidebar> {
         &self.sidebar
+    }
+
+    pub fn model_selector(&self) -> &Entity<ModelSelector> {
+        &self.model_selector
+    }
+
+    pub fn resolved_provider_id(&self, cx: &App) -> String {
+        let configured_provider_id = self.settings_state.read(cx).settings().provider_id.clone();
+
+        if configured_provider_id.trim().is_empty() {
+            "openai".to_string()
+        } else {
+            configured_provider_id.trim().to_string()
+        }
     }
 
     pub fn create_conversation(&mut self, cx: &mut Context<Self>) {
@@ -940,12 +954,6 @@ fn storage_role_to_chat(role: StorageMessageRole) -> Role {
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let configured_provider_id = self.settings_state.read(cx).settings().provider_id.clone();
-        let provider_id = if configured_provider_id.trim().is_empty() {
-            "openai".to_string()
-        } else {
-            configured_provider_id.trim().to_string()
-        };
 
         v_flex()
             .id("chat-view")
@@ -955,73 +963,30 @@ impl Render for ChatView {
             .overflow_hidden()
             .bg(theme.background)
             .child(
-                v_flex()
-                    .id("chat-view-content")
-                    .size_full()
+                div()
+                    .id("chat-view-message-list")
+                    .flex_1()
                     .min_h_0()
-                    .pt(px(48.))
-                    .child(
-                        div()
-                            .id("chat-view-message-list")
-                            .flex_1()
-                            .min_h_0()
-                            .child(self.message_list.clone()),
-                    )
-                    .child(
-                        div()
-                            .id("chat-view-message-input")
-                            .flex_shrink_0()
-                            .w_full()
-                            .child(self.message_input.clone()),
-                    ),
+                    .child(self.message_list.clone()),
             )
             .child(
-                h_flex()
-                    .id("chat-view-header")
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(48.))
-                    .px_4()
-                    .items_center()
-                    .justify_between()
-                    .bg(theme.background)
-                    .border_b_1()
+                div()
+                    .id("chat-view-message-input")
+                    .flex_shrink_0()
+                    .w_full()
+                    .border_t_1()
                     .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground)
-                            .child("Chat"),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .id("chat-view-provider-id")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_full()
-                                    .bg(theme.muted)
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(provider_id),
-                            )
-                            .child(self.model_selector.clone()),
-                    ),
+                    .child(self.message_input.clone()),
             )
             .when(self.settings_open, |el| {
                 el.child(
                     div()
                         .id("settings-overlay")
                         .absolute()
-                        .inset_0()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
                         .bg(theme.background.opacity(0.8))
                         .flex()
                         .items_center()
