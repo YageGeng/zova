@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::{ActiveTheme, Root, v_flex};
 use gpui_tokio_bridge::Tokio;
 
 use crate::chat::events::{ConversationSelected, Stop, Submit};
@@ -21,7 +20,7 @@ use crate::llm::{
     ProviderStreamHandle, ProviderWorker, StreamRequest, create_provider,
 };
 use crate::model_selector::{ModelSelected, ModelSelector, ModelSelectorSettingsClicked};
-use crate::settings::{SettingsChanged, SettingsClose, SettingsState, SettingsView};
+use crate::settings::{SettingsChanged, SettingsState, SettingsView};
 use zova_storage::{MessageId as StorageMessageId, MessageRole as StorageMessageRole};
 
 pub const STREAM_DEBOUNCE_MS: u64 = 50;
@@ -40,8 +39,7 @@ pub struct ChatView {
     message_input: Entity<MessageInput>,
     model_selector: Entity<ModelSelector>,
     settings_state: Entity<SettingsState>,
-    settings_view: Entity<SettingsView>,
-    settings_open: bool,
+    settings_window: Option<WindowHandle<Root>>,
     provider: Option<Arc<dyn LlmProvider>>,
     current_model_id: String,
     conversations: HashMap<ConversationId, Conversation>,
@@ -112,16 +110,13 @@ impl ChatView {
             selector.set_model_id(current_model_id.clone(), cx);
         });
 
-        let settings_view = cx.new(|cx| SettingsView::new(&settings_state, window, cx));
-
         let mut this = Self {
             sidebar: sidebar.clone(),
             message_list: message_list.clone(),
             message_input: message_input.clone(),
             model_selector: model_selector.clone(),
             settings_state: settings_state.clone(),
-            settings_view: settings_view.clone(),
-            settings_open: false,
+            settings_window: None,
             provider,
             current_model_id,
             conversations,
@@ -184,11 +179,6 @@ impl ChatView {
         })
         .detach();
 
-        cx.subscribe(&settings_view, |this, _, _event: &SettingsClose, cx| {
-            this.close_settings(cx);
-        })
-        .detach();
-
         this
     }
 
@@ -221,16 +211,44 @@ impl ChatView {
     }
 
     fn open_settings(&mut self, cx: &mut Context<Self>) {
-        if self.settings_open {
+        if let Some(settings_window) = self.settings_window.as_ref()
+            && settings_window
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+        {
             return;
         }
-        self.settings_open = true;
-        cx.notify();
-    }
 
-    fn close_settings(&mut self, cx: &mut Context<Self>) {
-        self.settings_open = false;
-        cx.notify();
+        self.settings_window = None;
+
+        let settings_state = self.settings_state.clone();
+        let settings_bounds = Bounds::centered(None, size(px(860.), px(760.)), cx);
+        let settings_window = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(settings_bounds)),
+                titlebar: Some(TitlebarOptions {
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(14.), px(14.))),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let settings_view = cx.new(|cx| SettingsView::new(&settings_state, window, cx));
+                cx.new(|cx| Root::new(settings_view, window, cx))
+            },
+        );
+
+        match settings_window {
+            Ok(settings_window) => {
+                self.settings_window = Some(settings_window);
+            }
+            Err(error) => {
+                tracing::error!("failed to open settings window: {}", error);
+            }
+        }
     }
 
     fn handle_settings_changed(&mut self, event: &SettingsChanged, cx: &mut Context<Self>) {
@@ -978,21 +996,5 @@ impl Render for ChatView {
                     .border_color(theme.border)
                     .child(self.message_input.clone()),
             )
-            .when(self.settings_open, |el| {
-                el.child(
-                    div()
-                        .id("settings-overlay")
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .bg(theme.background.opacity(0.8))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(self.settings_view.clone()),
-                )
-            })
     }
 }

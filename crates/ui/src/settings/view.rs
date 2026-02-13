@@ -4,12 +4,16 @@ use gpui_component::{
     ActiveTheme, IndexPath, Sizable, ThemeMode, ThemeRegistry,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputState},
-    select::{Select, SelectState},
+    input::InputState,
+    scroll::ScrollableElement,
+    select::SelectState,
     v_flex,
 };
 
 use crate::settings::state::{ModelSettings, ProviderSettings, SettingsState};
+
+mod provider;
+mod theme;
 
 struct ModelInputRow {
     model_name_input: Entity<InputState>,
@@ -17,6 +21,14 @@ struct ModelInputRow {
     max_output_tokens_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsCategory {
+    Provider,
+    Theme,
+}
+
+const SETTINGS_TRAFFIC_LIGHT_SAFE_TOP: f32 = 44.0;
 
 pub struct SettingsView {
     state: Entity<SettingsState>,
@@ -26,13 +38,9 @@ pub struct SettingsView {
     model_rows: Vec<ModelInputRow>,
     theme_preset_select: Entity<SelectState<Vec<SharedString>>>,
     theme_mode: ThemeMode,
+    active_category: SettingsCategory,
     error_message: Option<String>,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SettingsClose;
-
-impl EventEmitter<SettingsClose> for SettingsView {}
 
 impl SettingsView {
     fn theme_names(cx: &App) -> Vec<SharedString> {
@@ -227,6 +235,7 @@ impl SettingsView {
             model_rows,
             theme_preset_select,
             theme_mode: settings.theme_mode,
+            active_category: SettingsCategory::Provider,
             error_message: None,
         }
     }
@@ -301,7 +310,7 @@ impl SettingsView {
     fn save_settings(
         &mut self,
         _event: &gpui::ClickEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let provider_id = self.provider_input.read(cx).value().to_string();
@@ -342,7 +351,7 @@ impl SettingsView {
         {
             Ok(()) => {
                 self.error_message = None;
-                cx.emit(SettingsClose);
+                window.remove_window();
                 cx.notify();
             }
             Err(error) => {
@@ -352,263 +361,100 @@ impl SettingsView {
         }
     }
 
-    fn cancel(&mut self, _event: &gpui::ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn cancel(&mut self, _event: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.error_message = None;
-        cx.emit(SettingsClose);
+        window.remove_window();
+        cx.notify();
+    }
+
+    fn select_provider_category(
+        &mut self,
+        _event: &gpui::ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_category = SettingsCategory::Provider;
+        cx.notify();
+    }
+
+    fn select_theme_category(
+        &mut self,
+        _event: &gpui::ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_category = SettingsCategory::Theme;
         cx.notify();
     }
 }
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let provider_selected = self.active_category == SettingsCategory::Provider;
+        let theme_selected = self.active_category == SettingsCategory::Theme;
+        let category_content = match self.active_category {
+            SettingsCategory::Provider => provider::render(self, cx),
+            SettingsCategory::Theme => theme::render(self, cx),
+        };
         let theme = cx.theme();
-        let can_remove_rows = self.model_rows.len() > 1;
 
         v_flex()
             .id("settings-view")
-            .w(px(700.))
-            .gap_4()
-            .p_4()
-            .bg(theme.popover)
-            .rounded_lg()
-            .shadow_lg()
-            .child(
-                div()
-                    .text_lg()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.foreground)
-                    .child("Provider Settings"),
-            )
-            .child(
-                v_flex()
-                    .gap_3()
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child("Provider"),
-                            )
-                            .child(Input::new(&self.provider_input).w_full()),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child("API Key"),
-                            )
-                            .child(Input::new(&self.api_key_input).w_full()),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child("Endpoint"),
-                            )
-                            .child(Input::new(&self.endpoint_input).w_full()),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child("Models"),
-                                    )
-                                    .child(
-                                        Button::new("settings-add-model")
-                                            .ghost()
-                                            .small()
-                                            .child("Add Model")
-                                            .on_click(cx.listener(Self::add_model_row)),
-                                    ),
-                            )
-                            .children(self.model_rows.iter().enumerate().map(|(index, row)| {
-                                let model_name_input = row.model_name_input.clone();
-                                let max_completion_tokens_input =
-                                    row.max_completion_tokens_input.clone();
-                                let max_output_tokens_input = row.max_output_tokens_input.clone();
-                                let max_tokens_input = row.max_tokens_input.clone();
-
-                                v_flex()
-                                    .id(("settings-model-row", index))
-                                    .gap_2()
-                                    .p_3()
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .rounded_md()
-                                    .child(
-                                        h_flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(format!("Model #{}", index + 1)),
-                                            )
-                                            .when(can_remove_rows, |row_header| {
-                                                row_header.child(
-                                                    Button::new(("settings-remove-model", index))
-                                                        .ghost()
-                                                        .xsmall()
-                                                        .child("Remove")
-                                                        .on_click(cx.listener(
-                                                            move |this, _event, window, cx| {
-                                                                this.remove_model_row(
-                                                                    index, window, cx,
-                                                                );
-                                                            },
-                                                        )),
-                                                )
-                                            }),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.foreground)
-                                                    .child("model_name"),
-                                            )
-                                            .child(Input::new(&model_name_input).w_full()),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .gap_2()
-                                            .child(
-                                                v_flex()
-                                                    .gap_1()
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(theme.foreground)
-                                                            .child("max_completion_tokens"),
-                                                    )
-                                                    .child(
-                                                        Input::new(&max_completion_tokens_input)
-                                                            .w_full(),
-                                                    ),
-                                            )
-                                            .child(
-                                                v_flex()
-                                                    .gap_1()
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(theme.foreground)
-                                                            .child("max_output_tokens"),
-                                                    )
-                                                    .child(
-                                                        Input::new(&max_output_tokens_input)
-                                                            .w_full(),
-                                                    ),
-                                            )
-                                            .child(
-                                                v_flex()
-                                                    .gap_1()
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(theme.foreground)
-                                                            .child("max_tokens"),
-                                                    )
-                                                    .child(Input::new(&max_tokens_input).w_full()),
-                                            ),
-                                    )
-                                    .into_any_element()
-                            })),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child("Theme Mode"),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("settings-theme-light")
-                                            .small()
-                                            .when(self.theme_mode == ThemeMode::Light, |button| {
-                                                button.primary()
-                                            })
-                                            .when(self.theme_mode != ThemeMode::Light, |button| {
-                                                button.ghost()
-                                            })
-                                            .child("Light")
-                                            .on_click(cx.listener(Self::select_light_mode)),
-                                    )
-                                    .child(
-                                        Button::new("settings-theme-dark")
-                                            .small()
-                                            .when(self.theme_mode == ThemeMode::Dark, |button| {
-                                                button.primary()
-                                            })
-                                            .when(self.theme_mode != ThemeMode::Dark, |button| {
-                                                button.ghost()
-                                            })
-                                            .child("Dark")
-                                            .on_click(cx.listener(Self::select_dark_mode)),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child("Theme Preset"),
-                            )
-                            .child(
-                                Select::new(&self.theme_preset_select)
-                                    .w_full()
-                                    .placeholder("Follow mode")
-                                    .search_placeholder("Search theme preset")
-                                    .cleanable(true),
-                            ),
-                    ),
-            )
-            .when_some(self.error_message.clone(), |el, error| {
-                el.child(div().text_sm().text_color(theme.danger).child(error))
-            })
+            .size_full()
+            .min_h_0()
+            .bg(theme.background)
             .child(
                 h_flex()
-                    .gap_2()
-                    .justify_end()
+                    .size_full()
+                    .min_h_0()
+                    .overflow_hidden()
                     .child(
-                        Button::new("settings-cancel")
-                            .ghost()
-                            .small()
-                            .child("Cancel")
-                            .on_click(cx.listener(Self::cancel)),
+                        v_flex()
+                            .id("settings-category-list")
+                            .w(px(200.))
+                            .h_full()
+                            .flex_shrink_0()
+                            .pt(px(SETTINGS_TRAFFIC_LIGHT_SAFE_TOP))
+                            .px_3()
+                            .pb_3()
+                            .gap_2()
+                            .bg(theme.muted.opacity(0.35))
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.muted_foreground)
+                                    .child("Categories"),
+                            )
+                            .child(
+                                Button::new("settings-category-provider")
+                                    .small()
+                                    .when(provider_selected, |button| button.primary())
+                                    .when(!provider_selected, |button| button.ghost())
+                                    .child("Provider")
+                                    .on_click(cx.listener(Self::select_provider_category)),
+                            )
+                            .child(
+                                Button::new("settings-category-theme")
+                                    .small()
+                                    .when(theme_selected, |button| button.primary())
+                                    .when(!theme_selected, |button| button.ghost())
+                                    .child("Theme")
+                                    .on_click(cx.listener(Self::select_theme_category)),
+                            ),
                     )
                     .child(
-                        Button::new("settings-save")
-                            .primary()
-                            .small()
-                            .child("Save")
-                            .on_click(cx.listener(Self::save_settings)),
+                        div()
+                            .id("settings-category-content")
+                            .flex_1()
+                            .h_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .pt(px(SETTINGS_TRAFFIC_LIGHT_SAFE_TOP))
+                            .child(category_content),
                     ),
             )
     }
