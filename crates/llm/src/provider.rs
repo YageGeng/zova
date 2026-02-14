@@ -4,9 +4,61 @@ use std::pin::Pin;
 use snafu::Snafu;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::chat::{Role, StreamEventMapped, StreamTarget};
-
 use super::model::{Model, ModelCatalog};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConversationId(pub u64);
+
+impl ConversationId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StreamSessionId(pub u64);
+
+impl StreamSessionId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StreamTarget {
+    pub conversation_id: ConversationId,
+    pub session_id: StreamSessionId,
+}
+
+impl StreamTarget {
+    pub const fn new(conversation_id: ConversationId, session_id: StreamSessionId) -> Self {
+        Self {
+            conversation_id,
+            session_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamEventPayload {
+    Delta(String),
+    ReasoningDelta(String),
+    Done,
+    Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamEventMapped {
+    pub target: StreamTarget,
+    pub payload: StreamEventPayload,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderConfig {

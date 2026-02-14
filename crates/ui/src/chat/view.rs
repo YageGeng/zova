@@ -13,14 +13,16 @@ use crate::chat::message::{
 };
 use crate::chat::{
     ChatSidebar, MessageInput, MessageList, SidebarSettingsClicked, SidebarToggleClicked,
-    StreamEventMapped, StreamEventPayload,
-};
-use crate::llm::{
-    DEFAULT_OPENAI_MODEL, LlmProvider, ProviderConfig, ProviderEventStream, ProviderMessage,
-    ProviderStreamHandle, ProviderWorker, StreamRequest, create_provider,
 };
 use crate::model_selector::{ModelSelected, ModelSelector, ModelSelectorSettingsClicked};
 use crate::settings::{SettingsChanged, SettingsState, SettingsView};
+use zova_llm::{
+    DEFAULT_OPENAI_MODEL, LlmProvider, ProviderConfig, ProviderError, ProviderEventStream,
+    ProviderMessage, ProviderStreamHandle, ProviderWorker, Role as ProviderRole,
+    StreamEventMapped as ProviderStreamEventMapped,
+    StreamEventPayload as ProviderStreamEventPayload, StreamRequest,
+    StreamTarget as ProviderStreamTarget, create_provider,
+};
 use zova_storage::{MessageId as StorageMessageId, MessageRole as StorageMessageRole};
 
 pub const STREAM_DEBOUNCE_MS: u64 = 50;
@@ -327,7 +329,7 @@ impl ChatView {
 
     fn create_provider_from_settings(
         settings: &crate::settings::state::ProviderSettings,
-    ) -> Result<(Option<Arc<dyn LlmProvider>>, String), crate::llm::ProviderError> {
+    ) -> Result<(Option<Arc<dyn LlmProvider>>, String), ProviderError> {
         let config = settings.to_provider_config();
         let model_id = settings.default_model_name();
 
@@ -493,7 +495,7 @@ impl ChatView {
             .model_max_tokens(&self.current_model_id);
 
         let mut request = StreamRequest::new(
-            event.target,
+            Self::chat_target_to_provider(event.target),
             self.current_model_id.clone(),
             request_messages,
         );
@@ -553,29 +555,39 @@ impl ChatView {
         }));
     }
 
-    fn handle_stream_event(&mut self, event: StreamEventMapped, cx: &mut Context<Self>) {
-        if !self.stream_event_is_current(event.target) {
+    fn handle_stream_event(&mut self, event: ProviderStreamEventMapped, cx: &mut Context<Self>) {
+        // Provider events carry zova-llm typed IDs; normalize them to chat-domain IDs
+        // before stale-session checks so stream isolation logic stays consistent.
+        let event_target = Self::provider_target_to_chat(event.target);
+
+        if !self.stream_event_is_current(event_target) {
             // Strict target equality prevents chunk leakage across conversation/session boundaries.
             return;
         }
 
         match event.payload {
-            StreamEventPayload::Delta(chunk) | StreamEventPayload::ReasoningDelta(chunk) => {
+            ProviderStreamEventPayload::Delta(chunk)
+            | ProviderStreamEventPayload::ReasoningDelta(chunk) => {
                 self.pending_stream_chunk.push_str(&chunk);
                 self.schedule_debounced_stream_flush(cx);
             }
-            StreamEventPayload::Done => {
+            ProviderStreamEventPayload::Done => {
                 self.flush_pending_stream_chunk(cx);
-                self.finish_stream_with_done(event.target, cx);
+                self.finish_stream_with_done(event_target, cx);
             }
-            StreamEventPayload::Error(message) => {
+            ProviderStreamEventPayload::Error(message) => {
                 self.flush_pending_stream_chunk(cx);
-                self.finish_stream_with_error(event.target, message, cx);
+                self.finish_stream_with_error(event_target, message, cx);
             }
         }
     }
 
-    fn handle_stream_reader_closed(&mut self, target: StreamTarget, cx: &mut Context<Self>) {
+    fn handle_stream_reader_closed(
+        &mut self,
+        target: ProviderStreamTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let target = Self::provider_target_to_chat(target);
         self.stream_worker_task = None;
         self.stream_reader_task = None;
 
@@ -902,8 +914,39 @@ impl ChatView {
             .iter()
             .filter(|message| !message.content.trim().is_empty())
             .filter(|message| !matches!(message.status, MessageStatus::Streaming(_)))
-            .map(|message| ProviderMessage::new(message.role, message.content.clone()))
+            .map(|message| {
+                // Keep role mapping explicit at the crate boundary so llm types stay
+                // decoupled from chat domain enums.
+                ProviderMessage::new(
+                    Self::chat_role_to_provider(message.role),
+                    message.content.clone(),
+                )
+            })
             .collect()
+    }
+
+    fn chat_role_to_provider(role: Role) -> ProviderRole {
+        match role {
+            Role::System => ProviderRole::System,
+            Role::User => ProviderRole::User,
+            Role::Assistant => ProviderRole::Assistant,
+        }
+    }
+
+    fn chat_target_to_provider(target: StreamTarget) -> ProviderStreamTarget {
+        // Preserve numeric identity while translating between domain-specific typed wrappers.
+        ProviderStreamTarget::new(
+            zova_llm::ConversationId::new(target.conversation_id.0),
+            zova_llm::StreamSessionId::new(target.session_id.0),
+        )
+    }
+
+    fn provider_target_to_chat(target: ProviderStreamTarget) -> StreamTarget {
+        // Convert provider routing keys back into chat routing keys for state transitions.
+        StreamTarget::new(
+            ConversationId::new(target.conversation_id.0),
+            StreamSessionId::new(target.session_id.0),
+        )
     }
 
     fn push_provider_not_configured_error(

@@ -10,6 +10,7 @@ use gpui::*;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snafu::{ResultExt, Snafu};
+use zova_llm::{DEFAULT_OPENAI_MODEL, Model, ProviderConfig};
 
 pub const DEFAULT_PROVIDER_ID: &str = "openai";
 pub const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1";
@@ -30,7 +31,7 @@ pub struct ModelSettings {
 impl Default for ModelSettings {
     fn default() -> Self {
         Self {
-            model_name: crate::llm::DEFAULT_OPENAI_MODEL.to_string(),
+            model_name: DEFAULT_OPENAI_MODEL.to_string(),
             max_completion_tokens: None,
             max_output_tokens: None,
             max_tokens: None,
@@ -48,8 +49,8 @@ impl ModelSettings {
         Some(self)
     }
 
-    pub fn as_selector_model(&self) -> crate::llm::Model {
-        let mut model = crate::llm::Model::from_id(self.model_name.clone());
+    pub fn as_selector_model(&self) -> Model {
+        let mut model = Model::from_id(self.model_name.clone());
         if let Some(description) = self.token_limits_description() {
             model = model.with_description(description);
         }
@@ -110,12 +111,12 @@ impl Default for ProviderSettings {
 }
 
 impl ProviderSettings {
-    pub fn to_provider_config(&self) -> Option<crate::llm::ProviderConfig> {
+    pub fn to_provider_config(&self) -> Option<ProviderConfig> {
         if self.api_key.trim().is_empty() {
             return None;
         }
 
-        Some(crate::llm::ProviderConfig::new(
+        Some(ProviderConfig::new(
             &self.provider_id,
             &self.api_key,
             &self.endpoint,
@@ -137,10 +138,10 @@ impl ProviderSettings {
                     Some(name.to_string())
                 }
             })
-            .unwrap_or_else(|| crate::llm::DEFAULT_OPENAI_MODEL.to_string())
+            .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string())
     }
 
-    pub fn configured_models(&self) -> Vec<crate::llm::Model> {
+    pub fn configured_models(&self) -> Vec<Model> {
         let models = self
             .models
             .iter()

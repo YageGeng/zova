@@ -9,16 +9,14 @@ use rig::streaming::StreamedAssistantContent;
 use snafu::{ResultExt, ensure};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::chat::{Role, StreamEventMapped, StreamEventPayload, StreamTarget};
-
 use super::model::{
     DEFAULT_OPENAI_MODEL, Model, ModelCache, ModelCatalog, default_openai_models, get_model_cache,
 };
 use super::provider::{
     BoxFuture, CompletionsFailedSnafu, EmptyMessageSetSnafu, HttpClientSnafu, LlmProvider,
     MissingApiKeySnafu, ModelFetchStatusSnafu, ModelPayloadParseSnafu, ProviderConfig,
-    ProviderError, ProviderResult, ProviderStreamHandle, ProviderWorker, StreamRequest,
-    make_event_stream,
+    ProviderError, ProviderResult, ProviderStreamHandle, ProviderWorker, Role, StreamEventMapped,
+    StreamEventPayload, StreamRequest, StreamTarget, make_event_stream,
 };
 
 pub const RIG_OPENAI_PROVIDER_ID: &str = "openai";
@@ -143,6 +141,8 @@ impl RigProviderAdapter {
             preamble_parts.push(preamble.clone());
         }
 
+        // Rig exposes a single preamble field, so system-role messages are folded into it
+        // to preserve caller intent while still sending user/assistant turns as chat messages.
         for message in &request.messages {
             if matches!(message.role, Role::System) && !message.content.trim().is_empty() {
                 preamble_parts.push(message.content.clone());
@@ -169,15 +169,40 @@ impl RigProviderAdapter {
             .filter_map(Self::to_rig_message)
             .collect::<Vec<_>>();
 
-        ensure!(
-            !messages.is_empty(),
-            EmptyMessageSetSnafu {
-                stage: "open-stream",
+        let total_message_count = request.messages.len();
+        let system_message_count = request
+            .messages
+            .iter()
+            .filter(|message| matches!(message.role, Role::System))
+            .count();
+
+        if messages.is_empty() {
+            tracing::warn!(
+                target = ?request.target,
+                model_id = %request.model_id,
+                total_message_count,
+                system_message_count,
+                "cannot open stream because no user/assistant messages remain after filtering"
+            );
+            return EmptyMessageSetSnafu {
+                stage: "open-stream-filter-messages",
                 target: request.target,
             }
-        );
+            .fail();
+        }
 
-        let prompt = messages.pop().expect("message list cannot be empty");
+        let Some(prompt) = messages.pop() else {
+            tracing::error!(
+                target = ?request.target,
+                model_id = %request.model_id,
+                "message list became empty before prompt extraction"
+            );
+            return EmptyMessageSetSnafu {
+                stage: "open-stream-pop-prompt",
+                target: request.target,
+            }
+            .fail();
+        };
         let mut builder = model.completion_request(prompt).messages(messages);
 
         if let Some(preamble) = Self::merged_preamble(request) {
@@ -249,6 +274,13 @@ impl RigProviderAdapter {
         let mut stream = match Self::open_stream(&config, &request).await {
             Ok(stream) => stream,
             Err(error) => {
+                tracing::error!(
+                    target = ?target,
+                    provider_id = %config.provider_id,
+                    model_id = %request.model_id,
+                    error = %error,
+                    "failed to open provider stream"
+                );
                 Self::emit_error_event(&event_tx, target, error);
                 return;
             }
@@ -262,6 +294,7 @@ impl RigProviderAdapter {
                 _ = &mut cancel_rx => {
                     cancelled = true;
                     // Cancel the upstream Rig stream so provider IO stops promptly.
+                    tracing::debug!(target = ?target, "provider stream cancelled");
                     stream.cancel();
                     break;
                 }
@@ -276,6 +309,11 @@ impl RigProviderAdapter {
                         }
                         Some(Err(source)) => {
                             stream_failed = true;
+                            tracing::warn!(
+                                target = ?target,
+                                error = %source,
+                                "provider stream emitted an error chunk"
+                            );
                             let error = ProviderError::CompletionsFailed {
                                 stage: "stream-chunk",
                                 source,
@@ -321,19 +359,36 @@ impl LlmProvider for RigProviderAdapter {
                 return Ok(ModelCatalog::from_cache_fresh(models));
             }
 
+            // Fallback order intentionally prefers availability over strict freshness:
+            // provider API first, then stale cache, then static defaults.
             match self.fetch_models_from_provider().await {
                 Ok(models) => {
                     self.model_cache.set(self.id(), models.clone()).await;
                     Ok(ModelCatalog::from_provider_api(models))
                 }
                 Err(error) => {
+                    let error_message = error.to_string();
+
                     if let Some(models) = self.model_cache.get_any(self.id()).await {
-                        return Ok(ModelCatalog::from_cache_stale(models, error.to_string()));
+                        tracing::warn!(
+                            provider_id = %self.id(),
+                            cached_model_count = models.len(),
+                            error = %error_message,
+                            "model fetch failed; serving stale cached models"
+                        );
+                        return Ok(ModelCatalog::from_cache_stale(models, error_message));
                     }
+
+                    tracing::warn!(
+                        provider_id = %self.id(),
+                        fallback_model_count = self.fallback_models.len(),
+                        error = %error_message,
+                        "model fetch failed without cache; serving static fallback models"
+                    );
 
                     Ok(ModelCatalog::from_static_fallback(
                         self.fallback_models.clone(),
-                        error.to_string(),
+                        error_message,
                     ))
                 }
             }

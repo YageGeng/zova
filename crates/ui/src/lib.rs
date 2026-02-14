@@ -8,7 +8,6 @@ pub mod app;
 /// Chat domain contracts shared across UI modules.
 pub mod chat;
 pub mod database;
-pub mod llm;
 /// Model selector component for changing LLM models.
 pub mod model_selector;
 /// Settings persistence and UI.

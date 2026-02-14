@@ -1,0 +1,12 @@
+[package]
+edition = "2024"
+name = "zova-llm"
+publish = false
+version = "0.1.0"
+
+[dependencies]
+futures.workspace = true
+rig-core.workspace = true
+snafu.workspace = true
+tokio.workspace = true
+tracing.workspace = true

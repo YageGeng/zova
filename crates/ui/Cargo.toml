@@ -8,12 +8,10 @@ version = "0.1.0"
 arc-swap.workspace = true
 dirs.workspace = true
 figment.workspace = true
-futures.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true
 gpui-tokio-bridge.workspace = true
-rig-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
@@ -22,6 +20,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+zova-llm = { path = "../llm" }
 zova-storage = { path = "../storage" }
 
 [target.'cfg(target_os = "macos")'.dependencies]

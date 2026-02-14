@@ -6963,12 +6963,10 @@ dependencies = [
  "core-text",
  "dirs 6.0.0",
  "figment",
- "futures",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
  "gpui-tokio-bridge",
- "rig-core",
  "serde",
  "serde_json",
  "snafu",
@@ -6977,6 +6975,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zova-llm",
  "zova-storage",
 ]
 
@@ -8695,6 +8694,17 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zova-llm"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "rig-core",
+ "snafu",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "zova-storage"

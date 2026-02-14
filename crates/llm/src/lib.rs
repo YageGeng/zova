@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 mod model;
@@ -9,8 +11,9 @@ pub use model::{
     default_openai_models, get_model_cache,
 };
 pub use provider::{
-    LlmProvider, ProviderConfig, ProviderError, ProviderEventStream, ProviderMessage,
-    ProviderResult, ProviderStreamHandle, ProviderWorker, StreamRequest,
+    ConversationId, LlmProvider, ProviderConfig, ProviderError, ProviderEventStream,
+    ProviderMessage, ProviderResult, ProviderStreamHandle, ProviderWorker, Role, StreamEventMapped,
+    StreamEventPayload, StreamRequest, StreamSessionId, StreamTarget,
 };
 pub use rig_adapter::{RIG_OPENAI_PROVIDER_ID, RigProviderAdapter};
 

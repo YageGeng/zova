@@ -5,9 +5,9 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
+use zova_llm::{Model, default_openai_models};
 
 use crate::chat::events::ModelChanged;
-use crate::llm::{Model, default_openai_models};
 
 pub struct ModelSelector {
     current_model_id: String,
