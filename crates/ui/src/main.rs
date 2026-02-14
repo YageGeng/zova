@@ -68,8 +68,8 @@ fn main() {
                     ))),
                     titlebar: Some(TitlebarOptions {
                         appears_transparent: true,
-                        // Position traffic lights for macOS aesthetics
-                        traffic_light_position: Some(point(px(14.), px(14.))),
+                        // Align traffic lights with Zed-style top titlebar inset.
+                        traffic_light_position: Some(point(px(9.), px(9.))),
                         ..Default::default()
                     }),
                     // Match Zed-style client decorations on Linux/FreeBSD so the app draws
