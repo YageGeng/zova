@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 
 use snafu::Snafu;
@@ -78,6 +79,14 @@ impl ProviderConfig {
             api_key: api_key.into().trim().to_string(),
             endpoint: endpoint.into().trim().to_string(),
         }
+    }
+
+    pub fn cache_key(&self) -> String {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.provider_id.hash(&mut hasher);
+        self.endpoint.hash(&mut hasher);
+        self.api_key.hash(&mut hasher);
+        format!("{}:{:016x}", self.provider_id, hasher.finish())
     }
 }
 

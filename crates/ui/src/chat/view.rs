@@ -14,11 +14,13 @@ use crate::chat::message::{
 use crate::chat::{
     ChatSidebar, MessageInput, MessageList, SidebarSettingsClicked, SidebarToggleClicked,
 };
-use crate::model_selector::{ModelSelected, ModelSelector, ModelSelectorSettingsClicked};
-use crate::settings::{SettingsChanged, SettingsState, SettingsView};
+use crate::model_selector::{
+    ModelSelected, ModelSelector, ModelSelectorSettingsClicked, ProviderModelGroup,
+};
+use crate::settings::{ConfiguredModelGroup, SettingsChanged, SettingsState, SettingsView};
 use zova_llm::{
-    DEFAULT_OPENAI_MODEL, LlmProvider, ProviderConfig, ProviderError, ProviderEventStream,
-    ProviderMessage, ProviderStreamHandle, ProviderWorker, Role as ProviderRole,
+    DEFAULT_OPENAI_MODEL, LlmProvider, ProviderConfig, ProviderEventStream, ProviderMessage,
+    ProviderStreamHandle, ProviderWorker, Role as ProviderRole,
     StreamEventMapped as ProviderStreamEventMapped,
     StreamEventPayload as ProviderStreamEventPayload, StreamRequest,
     StreamTarget as ProviderStreamTarget, create_provider,
@@ -26,6 +28,18 @@ use zova_llm::{
 use zova_storage::{MessageId as StorageMessageId, MessageRole as StorageMessageRole};
 
 pub const STREAM_DEBOUNCE_MS: u64 = 50;
+
+struct ProviderBuildState {
+    providers: HashMap<String, Arc<dyn LlmProvider>>,
+    active_provider_error: Option<String>,
+}
+
+struct ProviderInitState {
+    providers: HashMap<String, Arc<dyn LlmProvider>>,
+    current_provider_key: String,
+    current_model_id: String,
+    provider_error: Option<String>,
+}
 
 /// Coordinator-level stream metadata kept outside the domain model.
 #[derive(Debug, Clone, Copy)]
@@ -42,7 +56,8 @@ pub struct ChatView {
     model_selector: Entity<ModelSelector>,
     settings_state: Entity<SettingsState>,
     settings_window: Option<WindowHandle<Root>>,
-    provider: Option<Arc<dyn LlmProvider>>,
+    providers: HashMap<String, Arc<dyn LlmProvider>>,
+    current_provider_key: String,
     current_model_id: String,
     conversations: HashMap<ConversationId, Conversation>,
     storage_message_ids: HashMap<ConversationId, HashMap<MessageId, StorageMessageId>>,
@@ -102,14 +117,24 @@ impl ChatView {
             });
         }
 
-        // Initialize provider from persisted settings with environment fallback
-        let (provider, current_model_id, provider_error) =
-            Self::initialize_provider(&settings_state, cx);
+        let provider_init_state = Self::initialize_providers(&settings_state, cx);
 
-        let model_selector = cx.new(|_| ModelSelector::new(&current_model_id));
+        let model_selector = cx.new(|_| {
+            ModelSelector::new(
+                provider_init_state.current_provider_key.clone(),
+                provider_init_state.current_model_id.clone(),
+            )
+        });
         model_selector.update(cx, |selector, cx| {
-            selector.set_models(initial_settings.configured_models(), cx);
-            selector.set_model_id(current_model_id.clone(), cx);
+            selector.set_provider_model_groups(
+                Self::selector_groups_from_settings(&initial_settings),
+                cx,
+            );
+            selector.set_selection(
+                provider_init_state.current_provider_key.clone(),
+                provider_init_state.current_model_id.clone(),
+                cx,
+            );
         });
 
         let mut this = Self {
@@ -119,8 +144,9 @@ impl ChatView {
             model_selector: model_selector.clone(),
             settings_state: settings_state.clone(),
             settings_window: None,
-            provider,
-            current_model_id,
+            providers: provider_init_state.providers,
+            current_provider_key: provider_init_state.current_provider_key,
+            current_model_id: provider_init_state.current_model_id,
             conversations,
             storage_message_ids: HashMap::new(),
             active_conversation_id: None,
@@ -131,7 +157,7 @@ impl ChatView {
             stream_reader_task: None,
             stream_debounce_task: None,
             pending_stream_chunk: String::new(),
-            provider_error,
+            provider_error: provider_init_state.provider_error,
         };
 
         if let Some(conversation_id) = initial_conversation_id {
@@ -193,13 +219,15 @@ impl ChatView {
     }
 
     pub fn resolved_provider_id(&self, cx: &App) -> String {
-        let configured_provider_id = self.settings_state.read(cx).settings().provider_id.clone();
-
-        if configured_provider_id.trim().is_empty() {
-            "openai".to_string()
-        } else {
-            configured_provider_id.trim().to_string()
+        let settings = self.settings_state.read(cx).settings();
+        if let Some(provider) = settings.provider_by_key(&self.current_provider_key) {
+            return provider.provider_id.clone();
         }
+
+        self.providers
+            .get(&self.current_provider_key)
+            .map(|provider| provider.id().to_string())
+            .unwrap_or_else(|| "openai".to_string())
     }
 
     pub fn create_conversation(&mut self, cx: &mut Context<Self>) {
@@ -261,85 +289,134 @@ impl ChatView {
         event.settings.apply_theme(None, cx);
         cx.refresh_windows();
 
-        let model_id = event.settings.default_model_name();
-        let available_models = event.settings.configured_models();
+        let current_provider_key = event.settings.active_provider_key().to_string();
+        let mut current_model_id = event.settings.default_model_name_for(&current_provider_key);
+        let selector_groups = Self::selector_groups_from_settings(&event.settings);
 
-        match Self::create_provider_from_settings(&event.settings) {
-            Ok((provider, _)) => {
-                self.provider = provider.clone();
-                self.current_model_id = model_id.clone();
-                self.provider_error = None;
+        let ProviderBuildState {
+            mut providers,
+            mut active_provider_error,
+        } = Self::create_providers_from_settings(&event.settings);
 
-                self.model_selector.update(cx, |selector, cx| {
-                    selector.set_models(available_models.clone(), cx);
-                    selector.set_model_id(model_id.clone(), cx);
-                });
-
-                tracing::info!("reloaded provider adapter with new settings");
+        if providers.is_empty() {
+            let (environment_provider, environment_model_id, environment_error) =
+                Self::provider_from_environment();
+            if let Some(environment_provider) = environment_provider {
+                providers.insert(current_provider_key.clone(), environment_provider);
+                current_model_id = environment_model_id;
+                active_provider_error = None;
+                tracing::info!("reloaded runtime providers using environment fallback");
+            } else if active_provider_error.is_none() {
+                active_provider_error = environment_error;
             }
-            Err(error) => {
-                self.provider = None;
-                self.provider_error = Some(format!("{}", error));
-                self.current_model_id = model_id.clone();
-                self.model_selector.update(cx, |selector, cx| {
-                    selector.set_models(available_models.clone(), cx);
-                    selector.set_model_id(model_id.clone(), cx);
-                });
-                tracing::error!("failed to reload provider adapter: {}", error);
-            }
+        }
+
+        self.providers = providers;
+        self.current_provider_key = current_provider_key.clone();
+        self.current_model_id = current_model_id.clone();
+        self.provider_error = active_provider_error;
+
+        self.model_selector.update(cx, |selector, cx| {
+            selector.set_provider_model_groups(selector_groups, cx);
+            selector.set_selection(current_provider_key.clone(), current_model_id.clone(), cx);
+        });
+
+        if let Some(error) = self.provider_error.as_ref() {
+            tracing::error!("failed to reload active provider: {error}");
+        } else {
+            tracing::info!("reloaded provider adapters with multi-provider settings");
         }
 
         cx.notify();
     }
 
     fn handle_model_selected(&mut self, event: ModelSelected, cx: &mut Context<Self>) {
+        self.current_provider_key = event.provider_key;
         self.current_model_id = event.model_id;
+        if self.providers.contains_key(&self.current_provider_key) {
+            self.provider_error = None;
+        } else {
+            self.provider_error = Some("Selected provider is not configured".to_string());
+        }
         cx.notify();
     }
 
-    fn initialize_provider(
+    fn initialize_providers(
         settings_state: &Entity<SettingsState>,
         cx: &mut Context<Self>,
-    ) -> (Option<Arc<dyn LlmProvider>>, String, Option<String>) {
+    ) -> ProviderInitState {
         let settings = settings_state.read(cx).settings();
-        let default_model_from_settings = settings.default_model_name();
+        let current_provider_key = settings.active_provider_key().to_string();
+        let default_model_from_settings = settings.default_model_name_for(&current_provider_key);
 
-        if settings.is_valid() {
-            match Self::create_provider_from_settings(&settings) {
-                Ok((provider, model_id)) => {
-                    tracing::info!("initialized provider from persisted settings");
-                    return (provider, model_id, None);
+        let ProviderBuildState {
+            mut providers,
+            mut active_provider_error,
+        } = Self::create_providers_from_settings(&settings);
+
+        if !providers.is_empty() {
+            tracing::info!("initialized runtime providers from persisted settings");
+            return ProviderInitState {
+                providers,
+                current_provider_key,
+                current_model_id: default_model_from_settings,
+                provider_error: active_provider_error,
+            };
+        }
+
+        let (environment_provider, environment_model_id, environment_error) =
+            Self::provider_from_environment();
+        if let Some(environment_provider) = environment_provider {
+            providers.insert(current_provider_key.clone(), environment_provider);
+            active_provider_error = None;
+            ProviderInitState {
+                providers,
+                current_provider_key,
+                current_model_id: environment_model_id,
+                provider_error: active_provider_error,
+            }
+        } else {
+            ProviderInitState {
+                providers,
+                current_provider_key,
+                current_model_id: default_model_from_settings,
+                provider_error: active_provider_error.or(environment_error),
+            }
+        }
+    }
+
+    fn create_providers_from_settings(
+        settings: &crate::settings::state::ProviderSettings,
+    ) -> ProviderBuildState {
+        let mut providers = HashMap::new();
+        let mut active_provider_error = None;
+
+        for provider_profile in settings.providers() {
+            let Some(config) = provider_profile.to_provider_config() else {
+                continue;
+            };
+
+            match create_provider(config) {
+                Ok(provider) => {
+                    providers.insert(provider_profile.provider_key.clone(), provider);
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        "failed to create provider from persisted settings, falling back: {}",
-                        e
+                Err(error) => {
+                    if provider_profile.provider_key == settings.active_provider_key() {
+                        active_provider_error = Some(error.to_string());
+                    }
+                    tracing::error!(
+                        provider_key = %provider_profile.provider_key,
+                        provider_id = %provider_profile.provider_id,
+                        error = %error,
+                        "failed to create provider from settings profile"
                     );
                 }
             }
         }
 
-        let (provider, environment_model_id, provider_error) = Self::provider_from_environment();
-        if provider.is_some() {
-            (provider, environment_model_id, provider_error)
-        } else {
-            (provider, default_model_from_settings, provider_error)
-        }
-    }
-
-    fn create_provider_from_settings(
-        settings: &crate::settings::state::ProviderSettings,
-    ) -> Result<(Option<Arc<dyn LlmProvider>>, String), ProviderError> {
-        let config = settings.to_provider_config();
-        let model_id = settings.default_model_name();
-
-        let Some(config) = config else {
-            return Ok((None, model_id));
-        };
-
-        match create_provider(config) {
-            Ok(provider) => Ok((Some(provider), model_id)),
-            Err(error) => Err(error),
+        ProviderBuildState {
+            providers,
+            active_provider_error,
         }
     }
 
@@ -370,6 +447,24 @@ impl ChatView {
                 tracing::error!("failed to initialize provider adapter: {error}");
                 (None, model_id, Some(format!("Provider error: {}", error)))
             }
+        }
+    }
+
+    fn selector_groups_from_settings(
+        settings: &crate::settings::state::ProviderSettings,
+    ) -> Vec<ProviderModelGroup> {
+        settings
+            .configured_model_groups()
+            .into_iter()
+            .map(Self::selector_group_from_settings_group)
+            .collect()
+    }
+
+    fn selector_group_from_settings_group(group: ConfiguredModelGroup) -> ProviderModelGroup {
+        ProviderModelGroup {
+            provider_key: group.provider_key,
+            provider_id: group.provider_id,
+            models: group.models,
         }
     }
 
@@ -418,10 +513,10 @@ impl ChatView {
             return;
         }
 
-        if self.provider.is_none() {
+        let Some(provider) = self.providers.get(&self.current_provider_key).cloned() else {
             self.push_provider_not_configured_error(active_conversation_id, cx);
             return;
-        }
+        };
 
         self.ensure_conversation_exists(active_conversation_id, cx);
 
@@ -492,7 +587,7 @@ impl ChatView {
             .settings_state
             .read(cx)
             .settings()
-            .model_max_tokens(&self.current_model_id);
+            .model_max_tokens(&self.current_provider_key, &self.current_model_id);
 
         let mut request = StreamRequest::new(
             Self::chat_target_to_provider(event.target),
@@ -503,11 +598,7 @@ impl ChatView {
             request = request.with_max_tokens(max_tokens);
         }
 
-        let stream_result = self
-            .provider
-            .as_ref()
-            .expect("provider checked above")
-            .stream_chat(request);
+        let stream_result = provider.stream_chat(request);
 
         match stream_result {
             Ok(handle) => self.spawn_stream_pipeline(handle, cx),

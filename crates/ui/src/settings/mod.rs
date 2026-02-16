@@ -1,5 +1,8 @@
 pub mod state;
 pub mod view;
 
-pub use state::{ModelSettings, ProviderSettings, SettingsChanged, SettingsError, SettingsState};
+pub use state::{
+    ConfiguredModelGroup, ModelSettings, ProviderProfileSettings, ProviderSettings,
+    SettingsChanged, SettingsError, SettingsState,
+};
 pub use view::SettingsView;

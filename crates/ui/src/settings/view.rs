@@ -10,7 +10,9 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::settings::state::{ModelSettings, ProviderSettings, SettingsState};
+use crate::settings::state::{
+    ModelSettings, ProviderProfileSettings, ProviderSettings, SettingsState,
+};
 
 mod provider;
 mod theme;
@@ -36,6 +38,9 @@ pub struct SettingsView {
     api_key_input: Entity<InputState>,
     endpoint_input: Entity<InputState>,
     model_rows: Vec<ModelInputRow>,
+    provider_profiles: Vec<ProviderProfileSettings>,
+    active_provider_index: usize,
+    expanded_provider_index: Option<usize>,
     theme_preset_select: Entity<SelectState<Vec<SharedString>>>,
     theme_mode: ThemeMode,
     active_category: SettingsCategory,
@@ -63,6 +68,38 @@ impl SettingsView {
             .iter()
             .position(|theme_name| theme_name.as_ref() == selected_theme_name.trim())
             .map(|index| IndexPath::default().row(index))
+    }
+
+    fn provider_profile_label(profile: &ProviderProfileSettings, index: usize) -> String {
+        let provider_id = profile.provider_id.trim();
+        if provider_id.is_empty() {
+            format!("Provider #{}", index + 1)
+        } else {
+            provider_id.to_string()
+        }
+    }
+
+    fn active_provider_profile(&self) -> Option<&ProviderProfileSettings> {
+        self.provider_profiles.get(self.active_provider_index)
+    }
+
+    fn active_provider_profile_mut(&mut self) -> Option<&mut ProviderProfileSettings> {
+        self.provider_profiles.get_mut(self.active_provider_index)
+    }
+
+    fn next_provider_key(&self) -> String {
+        let mut index = self.provider_profiles.len() + 1;
+        loop {
+            let candidate = format!("provider-{index}");
+            if !self
+                .provider_profiles
+                .iter()
+                .any(|profile| profile.provider_key == candidate)
+            {
+                return candidate;
+            }
+            index += 1;
+        }
     }
 
     fn new_model_row(
@@ -124,20 +161,35 @@ impl SettingsView {
     }
 
     fn build_model_rows(
-        settings: &ProviderSettings,
+        provider: &ProviderProfileSettings,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<ModelInputRow> {
-        let models = if settings.models.is_empty() {
+        let models = if provider.models.is_empty() {
             vec![ModelSettings::default()]
         } else {
-            settings.models.clone()
+            provider.models.clone()
         };
 
         models
             .iter()
             .map(|model| Self::new_model_row(model, window, cx))
             .collect()
+    }
+
+    fn load_active_provider_into_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(provider) = self.active_provider_profile().cloned() {
+            self.provider_input.update(cx, |input_state, cx| {
+                input_state.set_value(provider.provider_id.clone(), window, cx);
+            });
+            self.api_key_input.update(cx, |input_state, cx| {
+                input_state.set_value(provider.api_key.clone(), window, cx);
+            });
+            self.endpoint_input.update(cx, |input_state, cx| {
+                input_state.set_value(provider.endpoint.clone(), window, cx);
+            });
+            self.model_rows = Self::build_model_rows(&provider, window, cx);
+        }
     }
 
     fn parse_optional_u64(
@@ -198,28 +250,65 @@ impl SettingsView {
         Ok(models)
     }
 
+    fn apply_inputs_to_active_provider(&mut self, cx: &App) -> Result<(), String> {
+        let models = self.collect_models(cx)?;
+        let provider_id = self.provider_input.read(cx).value().trim().to_string();
+        let api_key = self.api_key_input.read(cx).value().trim().to_string();
+        let endpoint = self.endpoint_input.read(cx).value().trim().to_string();
+
+        if let Some(provider) = self.active_provider_profile_mut() {
+            provider.provider_id = provider_id;
+            provider.api_key = api_key;
+            provider.endpoint = if endpoint.is_empty() {
+                crate::settings::state::DEFAULT_ENDPOINT.to_string()
+            } else {
+                endpoint
+            };
+            provider.models = models;
+        }
+
+        Ok(())
+    }
+
+    fn apply_inputs_to_expanded_provider(&mut self, cx: &App) -> Result<(), String> {
+        if self.expanded_provider_index.is_some() {
+            self.apply_inputs_to_active_provider(cx)?;
+        }
+        Ok(())
+    }
+
     pub fn new(state: &Entity<SettingsState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = state.read(cx).settings();
 
         let provider_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Provider ID (e.g., openai)"));
-        provider_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.provider_id.clone(), window, cx);
-        });
-
         let api_key_input = cx.new(|cx| InputState::new(window, cx).placeholder("API Key"));
-        api_key_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.api_key.clone(), window, cx);
-        });
-
         let endpoint_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Endpoint (e.g., https://api.openai.com/v1)")
         });
+
+        let mut provider_profiles = settings.providers().to_vec();
+        if provider_profiles.is_empty() {
+            provider_profiles.push(ProviderProfileSettings::default());
+        }
+        let active_provider_index = settings.active_provider_index();
+
+        let default_provider = provider_profiles
+            .get(active_provider_index)
+            .cloned()
+            .unwrap_or_else(ProviderProfileSettings::default);
+
+        provider_input.update(cx, |input_state, cx| {
+            input_state.set_value(default_provider.provider_id.clone(), window, cx);
+        });
+        api_key_input.update(cx, |input_state, cx| {
+            input_state.set_value(default_provider.api_key.clone(), window, cx);
+        });
         endpoint_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.endpoint.clone(), window, cx);
+            input_state.set_value(default_provider.endpoint.clone(), window, cx);
         });
 
-        let model_rows = Self::build_model_rows(&settings, window, cx);
+        let model_rows = Self::build_model_rows(&default_provider, window, cx);
 
         let theme_names = Self::theme_names(cx);
         let selected_theme_index = Self::selected_theme_index(&theme_names, &settings.theme_name);
@@ -233,6 +322,9 @@ impl SettingsView {
             api_key_input,
             endpoint_input,
             model_rows,
+            provider_profiles,
+            active_provider_index,
+            expanded_provider_index: None,
             theme_preset_select,
             theme_mode: settings.theme_mode,
             active_category: SettingsCategory::Provider,
@@ -242,17 +334,16 @@ impl SettingsView {
 
     pub fn reload_from_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self.state.read(cx).settings();
+        self.provider_profiles = settings.providers().to_vec();
+        if self.provider_profiles.is_empty() {
+            self.provider_profiles
+                .push(ProviderProfileSettings::default());
+        }
+        self.active_provider_index = settings.active_provider_index();
+        self.expanded_provider_index = None;
 
-        self.provider_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.provider_id.clone(), window, cx);
-        });
-        self.api_key_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.api_key.clone(), window, cx);
-        });
-        self.endpoint_input.update(cx, |input_state, cx| {
-            input_state.set_value(settings.endpoint.clone(), window, cx);
-        });
-        self.model_rows = Self::build_model_rows(&settings, window, cx);
+        self.load_active_provider_into_inputs(window, cx);
+
         self.theme_preset_select.update(cx, |select_state, cx| {
             let theme_names = Self::theme_names(cx);
             let selected_theme_index =
@@ -262,6 +353,98 @@ impl SettingsView {
         });
         self.theme_mode = settings.theme_mode;
         self.error_message = None;
+    }
+
+    fn add_provider_profile(
+        &mut self,
+        _event: &gpui::ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.apply_inputs_to_expanded_provider(cx) {
+            self.error_message = Some(error);
+            cx.notify();
+            return;
+        }
+
+        let provider = ProviderProfileSettings {
+            provider_key: self.next_provider_key(),
+            ..ProviderProfileSettings::default()
+        };
+        self.provider_profiles.push(provider);
+        self.active_provider_index = self.provider_profiles.len().saturating_sub(1);
+        self.expanded_provider_index = None;
+        self.error_message = None;
+        cx.notify();
+    }
+
+    fn remove_provider_profile(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.provider_profiles.len() {
+            return;
+        }
+
+        if let Err(error) = self.apply_inputs_to_expanded_provider(cx) {
+            self.error_message = Some(error);
+            cx.notify();
+            return;
+        }
+
+        if self.provider_profiles.len() <= 1 {
+            if let Some(provider) = self.provider_profiles.get_mut(0) {
+                let provider_key = provider.provider_key.clone();
+                *provider = ProviderProfileSettings::default();
+                provider.provider_key = provider_key;
+            }
+            self.active_provider_index = 0;
+        } else {
+            self.provider_profiles.remove(index);
+
+            if self.active_provider_index > index {
+                self.active_provider_index = self.active_provider_index.saturating_sub(1);
+            } else if self.active_provider_index >= self.provider_profiles.len() {
+                self.active_provider_index = self.provider_profiles.len().saturating_sub(1);
+            }
+        }
+
+        self.expanded_provider_index = None;
+        self.error_message = None;
+        cx.notify();
+    }
+
+    fn select_provider_profile(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.provider_profiles.len() {
+            return;
+        }
+
+        if self.expanded_provider_index == Some(index) {
+            if let Err(error) = self.apply_inputs_to_active_provider(cx) {
+                self.error_message = Some(error);
+                cx.notify();
+                return;
+            }
+
+            self.expanded_provider_index = None;
+            self.error_message = None;
+            cx.notify();
+            return;
+        }
+
+        if let Err(error) = self.apply_inputs_to_expanded_provider(cx) {
+            self.error_message = Some(error);
+            cx.notify();
+            return;
+        }
+
+        self.active_provider_index = index;
+        self.load_active_provider_into_inputs(window, cx);
+        self.expanded_provider_index = Some(index);
+        self.error_message = None;
+        cx.notify();
     }
 
     fn add_model_row(
@@ -313,9 +496,18 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let provider_id = self.provider_input.read(cx).value().to_string();
-        let api_key = self.api_key_input.read(cx).value().to_string();
-        let endpoint = self.endpoint_input.read(cx).value().to_string();
+        if let Err(error) = self.apply_inputs_to_expanded_provider(cx) {
+            self.error_message = Some(error);
+            cx.notify();
+            return;
+        }
+
+        let Some(active_provider) = self.active_provider_profile() else {
+            self.error_message = Some("At least one provider is required".to_string());
+            cx.notify();
+            return;
+        };
+
         let theme_name = self
             .theme_preset_select
             .read(cx)
@@ -323,24 +515,13 @@ impl SettingsView {
             .map(|theme_name| theme_name.to_string())
             .unwrap_or_default();
 
-        let models = match self.collect_models(cx) {
-            Ok(models) => models,
-            Err(error) => {
-                self.error_message = Some(error);
-                cx.notify();
-                return;
-            }
-        };
-
         let new_settings = ProviderSettings {
-            provider_id: provider_id.trim().to_string(),
-            api_key: api_key.trim().to_string(),
-            endpoint: if endpoint.trim().is_empty() {
-                crate::settings::state::DEFAULT_ENDPOINT.to_string()
-            } else {
-                endpoint.trim().to_string()
-            },
-            models,
+            active_provider_key: active_provider.provider_key.clone(),
+            providers: self.provider_profiles.clone(),
+            provider_id: String::new(),
+            api_key: String::new(),
+            endpoint: String::new(),
+            models: Vec::new(),
             theme_mode: self.theme_mode,
             theme_name: theme_name.trim().to_string(),
         };

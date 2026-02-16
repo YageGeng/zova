@@ -22,6 +22,7 @@ pub struct Stop {
 /// Emitted when active model selection changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelChanged {
+    pub provider_key: String,
     pub model_id: String,
 }
 

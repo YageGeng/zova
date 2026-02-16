@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,12 +11,13 @@ use gpui::*;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snafu::{ResultExt, Snafu};
-use zova_llm::{DEFAULT_OPENAI_MODEL, Model, ProviderConfig};
+use zova_llm::{DEFAULT_OPENAI_MODEL, Model, ProviderConfig, default_openai_models};
 
 pub const DEFAULT_PROVIDER_ID: &str = "openai";
 pub const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1";
 pub const SETTINGS_DIRECTORY_NAME: &str = "zova";
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
+pub const DEFAULT_PROVIDER_KEY: &str = "provider-1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelSettings {
@@ -78,7 +80,9 @@ impl ModelSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderSettings {
+pub struct ProviderProfileSettings {
+    #[serde(default = "default_provider_key")]
+    pub provider_key: String,
     #[serde(default = "default_provider_id")]
     pub provider_id: String,
     #[serde(default)]
@@ -87,30 +91,21 @@ pub struct ProviderSettings {
     pub endpoint: String,
     #[serde(default = "default_models")]
     pub models: Vec<ModelSettings>,
-    #[serde(
-        default = "default_theme_mode",
-        serialize_with = "serialize_theme_mode",
-        deserialize_with = "deserialize_theme_mode"
-    )]
-    pub theme_mode: ThemeMode,
-    #[serde(default)]
-    pub theme_name: String,
 }
 
-impl Default for ProviderSettings {
+impl Default for ProviderProfileSettings {
     fn default() -> Self {
         Self {
+            provider_key: default_provider_key(),
             provider_id: default_provider_id(),
             api_key: String::new(),
             endpoint: default_endpoint(),
             models: default_models(),
-            theme_mode: default_theme_mode(),
-            theme_name: String::new(),
         }
     }
 }
 
-impl ProviderSettings {
+impl ProviderProfileSettings {
     pub fn to_provider_config(&self) -> Option<ProviderConfig> {
         if self.api_key.trim().is_empty() {
             return None;
@@ -163,7 +158,12 @@ impl ProviderSettings {
             .and_then(|model| model.max_tokens)
     }
 
-    pub fn normalized(mut self) -> Self {
+    fn normalized(mut self, fallback_key: String) -> Self {
+        self.provider_key = if self.provider_key.trim().is_empty() {
+            fallback_key
+        } else {
+            self.provider_key.trim().to_string()
+        };
         self.provider_id = if self.provider_id.trim().is_empty() {
             default_provider_id()
         } else {
@@ -175,9 +175,7 @@ impl ProviderSettings {
         } else {
             self.endpoint.trim().to_string()
         };
-        self.theme_name = self.theme_name.trim().to_string();
 
-        // Keep provider->models relationship valid by removing blank rows.
         self.models = self
             .models
             .into_iter()
@@ -186,6 +184,205 @@ impl ProviderSettings {
         if self.models.is_empty() {
             self.models.push(ModelSettings::default());
         }
+
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredModelGroup {
+    pub provider_key: String,
+    pub provider_id: String,
+    pub models: Vec<Model>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderSettings {
+    #[serde(default = "default_active_provider_key")]
+    pub active_provider_key: String,
+    #[serde(default = "default_provider_profiles")]
+    pub providers: Vec<ProviderProfileSettings>,
+
+    #[serde(default, skip_serializing)]
+    pub provider_id: String,
+    #[serde(default, skip_serializing)]
+    pub api_key: String,
+    #[serde(default, skip_serializing)]
+    pub endpoint: String,
+    #[serde(default, skip_serializing)]
+    pub models: Vec<ModelSettings>,
+
+    #[serde(
+        default = "default_theme_mode",
+        serialize_with = "serialize_theme_mode",
+        deserialize_with = "deserialize_theme_mode"
+    )]
+    pub theme_mode: ThemeMode,
+    #[serde(default)]
+    pub theme_name: String,
+}
+
+impl Default for ProviderSettings {
+    fn default() -> Self {
+        Self {
+            active_provider_key: default_active_provider_key(),
+            providers: default_provider_profiles(),
+            provider_id: String::new(),
+            api_key: String::new(),
+            endpoint: String::new(),
+            models: Vec::new(),
+            theme_mode: default_theme_mode(),
+            theme_name: String::new(),
+        }
+    }
+}
+
+impl ProviderSettings {
+    pub fn providers(&self) -> &[ProviderProfileSettings] {
+        &self.providers
+    }
+
+    pub fn active_provider_key(&self) -> &str {
+        &self.active_provider_key
+    }
+
+    pub fn active_provider_index(&self) -> usize {
+        self.providers
+            .iter()
+            .position(|provider| provider.provider_key == self.active_provider_key)
+            .unwrap_or(0)
+    }
+
+    pub fn provider_by_key(&self, provider_key: &str) -> Option<&ProviderProfileSettings> {
+        self.providers
+            .iter()
+            .find(|provider| provider.provider_key == provider_key)
+    }
+
+    pub fn active_provider(&self) -> Option<&ProviderProfileSettings> {
+        self.provider_by_key(&self.active_provider_key)
+    }
+
+    pub fn provider_config_for(&self, provider_key: &str) -> Option<ProviderConfig> {
+        self.provider_by_key(provider_key)
+            .and_then(ProviderProfileSettings::to_provider_config)
+    }
+
+    pub fn to_provider_config(&self) -> Option<ProviderConfig> {
+        self.provider_config_for(&self.active_provider_key)
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.active_provider()
+            .is_some_and(ProviderProfileSettings::is_valid)
+    }
+
+    pub fn default_model_name_for(&self, provider_key: &str) -> String {
+        self.provider_by_key(provider_key)
+            .map(ProviderProfileSettings::default_model_name)
+            .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string())
+    }
+
+    pub fn default_model_name(&self) -> String {
+        self.default_model_name_for(&self.active_provider_key)
+    }
+
+    pub fn configured_models_for(&self, provider_key: &str) -> Vec<Model> {
+        self.provider_by_key(provider_key)
+            .map(ProviderProfileSettings::configured_models)
+            .unwrap_or_else(default_openai_models)
+    }
+
+    pub fn configured_models(&self) -> Vec<Model> {
+        self.configured_models_for(&self.active_provider_key)
+    }
+
+    pub fn configured_model_groups(&self) -> Vec<ConfiguredModelGroup> {
+        self.providers
+            .iter()
+            .map(|provider| ConfiguredModelGroup {
+                provider_key: provider.provider_key.clone(),
+                provider_id: provider.provider_id.clone(),
+                models: provider.configured_models(),
+            })
+            .collect()
+    }
+
+    pub fn model_max_tokens(&self, provider_key: &str, model_name: &str) -> Option<u64> {
+        self.provider_by_key(provider_key)
+            .and_then(|provider| provider.model_max_tokens(model_name))
+    }
+
+    pub fn normalized(mut self) -> Self {
+        self.theme_name = self.theme_name.trim().to_string();
+
+        // Support legacy single-provider settings files by promoting top-level fields
+        // into one provider profile when the new `providers` list is absent.
+        if self.providers.is_empty() {
+            let legacy_provider = ProviderProfileSettings {
+                provider_key: default_provider_key(),
+                provider_id: if self.provider_id.trim().is_empty() {
+                    default_provider_id()
+                } else {
+                    self.provider_id.trim().to_string()
+                },
+                api_key: self.api_key.trim().to_string(),
+                endpoint: if self.endpoint.trim().is_empty() {
+                    default_endpoint()
+                } else {
+                    self.endpoint.trim().to_string()
+                },
+                models: if self.models.is_empty() {
+                    default_models()
+                } else {
+                    self.models.clone()
+                },
+            };
+            self.providers.push(legacy_provider);
+        }
+
+        // Keep provider keys stable/unique after normalization so selector routing and
+        // per-provider caches remain deterministic even with duplicate provider IDs.
+        let mut used_provider_keys = HashSet::new();
+        let mut normalized_providers = Vec::new();
+        for (index, provider) in self.providers.into_iter().enumerate() {
+            let mut provider = provider.normalized(format!("provider-{}", index + 1));
+            let base_key = provider.provider_key.clone();
+            if used_provider_keys.contains(&provider.provider_key) {
+                let mut suffix = 2;
+                loop {
+                    let candidate = format!("{base_key}-{suffix}");
+                    if !used_provider_keys.contains(&candidate) {
+                        provider.provider_key = candidate;
+                        break;
+                    }
+                    suffix += 1;
+                }
+            }
+            used_provider_keys.insert(provider.provider_key.clone());
+            normalized_providers.push(provider);
+        }
+
+        if normalized_providers.is_empty() {
+            normalized_providers.push(ProviderProfileSettings::default());
+        }
+        self.providers = normalized_providers;
+
+        self.active_provider_key = self.active_provider_key.trim().to_string();
+        if self.active_provider_key.is_empty()
+            || !self
+                .providers
+                .iter()
+                .any(|provider| provider.provider_key == self.active_provider_key)
+        {
+            self.active_provider_key = self.providers[0].provider_key.clone();
+        }
+
+        // Always clear legacy fields in memory so re-save keeps only the new schema.
+        self.provider_id.clear();
+        self.api_key.clear();
+        self.endpoint.clear();
+        self.models.clear();
 
         self
     }
@@ -369,6 +566,10 @@ impl SettingsState {
     }
 }
 
+fn default_provider_key() -> String {
+    DEFAULT_PROVIDER_KEY.to_string()
+}
+
 fn default_provider_id() -> String {
     DEFAULT_PROVIDER_ID.to_string()
 }
@@ -379,6 +580,14 @@ fn default_endpoint() -> String {
 
 fn default_models() -> Vec<ModelSettings> {
     vec![ModelSettings::default()]
+}
+
+fn default_provider_profiles() -> Vec<ProviderProfileSettings> {
+    vec![ProviderProfileSettings::default()]
+}
+
+fn default_active_provider_key() -> String {
+    default_provider_key()
 }
 
 fn default_theme_mode() -> ThemeMode {

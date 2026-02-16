@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use futures::StreamExt;
 use rig::completion::{CompletionModel, Message as RigMessage};
@@ -29,6 +30,53 @@ pub struct RigProviderAdapter {
     config: ProviderConfig,
     fallback_models: Vec<Model>,
     model_cache: Arc<ModelCache>,
+    model_cache_key: String,
+    client: Arc<openai::Client>,
+}
+
+struct HttpClientCache {
+    clients: RwLock<HashMap<String, Arc<openai::Client>>>,
+}
+
+impl HttpClientCache {
+    fn new() -> Self {
+        Self {
+            clients: RwLock::new(HashMap::new()),
+        }
+    }
+
+    fn get_or_create(&self, config: &ProviderConfig) -> ProviderResult<Arc<openai::Client>> {
+        let cache_key = config.cache_key();
+
+        if let Some(client) = self
+            .clients
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&cache_key)
+            .cloned()
+        {
+            tracing::debug!(provider_id = %config.provider_id, "reusing cached provider http client");
+            return Ok(client);
+        }
+
+        let created_client = Arc::new(RigProviderAdapter::build_client(config)?);
+        let mut clients = self
+            .clients
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let cached_client = clients
+            .entry(cache_key)
+            .or_insert_with(|| created_client.clone());
+        tracing::debug!(provider_id = %config.provider_id, "created provider http client cache entry");
+        Ok(cached_client.clone())
+    }
+}
+
+fn get_http_client_cache() -> Arc<HttpClientCache> {
+    static HTTP_CLIENT_CACHE: OnceLock<Arc<HttpClientCache>> = OnceLock::new();
+    HTTP_CLIENT_CACHE
+        .get_or_init(|| Arc::new(HttpClientCache::new()))
+        .clone()
 }
 
 impl RigProviderAdapter {
@@ -41,10 +89,15 @@ impl RigProviderAdapter {
             }
         );
 
+        let model_cache_key = config.cache_key();
+        let client = get_http_client_cache().get_or_create(&config)?;
+
         Ok(Self {
             config,
             fallback_models: default_openai_models(),
             model_cache: get_model_cache(),
+            model_cache_key,
+            client,
         })
     }
 
@@ -59,8 +112,8 @@ impl RigProviderAdapter {
     }
 
     async fn fetch_models_from_provider(&self) -> ProviderResult<Vec<Model>> {
-        let client = Self::build_client(&self.config)?;
-        let request = client
+        let request = self
+            .client
             .get("/models")
             .context(HttpClientSnafu {
                 stage: "build-model-request",
@@ -71,7 +124,7 @@ impl RigProviderAdapter {
                 message: source.to_string(),
             })?;
 
-        let response = client.send(request).await.context(HttpClientSnafu {
+        let response = self.client.send(request).await.context(HttpClientSnafu {
             stage: "send-model-request",
         })?;
         let status = response.status();
@@ -157,10 +210,9 @@ impl RigProviderAdapter {
     }
 
     async fn open_stream(
-        config: &ProviderConfig,
+        client: &openai::Client,
         request: &StreamRequest,
     ) -> ProviderResult<RigStreamingResponse> {
-        let client = Self::build_client(config)?;
         let model = client.completion_model(request.model_id.clone());
 
         let mut messages = request
@@ -265,18 +317,19 @@ impl RigProviderAdapter {
     }
 
     async fn run_stream_worker(
-        config: ProviderConfig,
+        provider_id: String,
+        client: Arc<openai::Client>,
         request: StreamRequest,
         event_tx: mpsc::UnboundedSender<StreamEventMapped>,
         mut cancel_rx: oneshot::Receiver<()>,
     ) {
         let target = request.target;
-        let mut stream = match Self::open_stream(&config, &request).await {
+        let mut stream = match Self::open_stream(&client, &request).await {
             Ok(stream) => stream,
             Err(error) => {
                 tracing::error!(
                     target = ?target,
-                    provider_id = %config.provider_id,
+                    provider_id = %provider_id,
                     model_id = %request.model_id,
                     error = %error,
                     "failed to open provider stream"
@@ -355,7 +408,7 @@ impl LlmProvider for RigProviderAdapter {
 
     fn fetch_models<'a>(&'a self) -> BoxFuture<'a, ProviderResult<ModelCatalog>> {
         Box::pin(async move {
-            if let Some(models) = self.model_cache.get_fresh(self.id()).await {
+            if let Some(models) = self.model_cache.get_fresh(&self.model_cache_key).await {
                 return Ok(ModelCatalog::from_cache_fresh(models));
             }
 
@@ -369,7 +422,7 @@ impl LlmProvider for RigProviderAdapter {
                 Err(error) => {
                     let error_message = error.to_string();
 
-                    if let Some(models) = self.model_cache.get_any(self.id()).await {
+                    if let Some(models) = self.model_cache.get_any(&self.model_cache_key).await {
                         tracing::warn!(
                             provider_id = %self.id(),
                             cached_model_count = models.len(),
@@ -406,7 +459,8 @@ impl LlmProvider for RigProviderAdapter {
 
         let (event_tx, stream, cancel_rx) = make_event_stream(request.target);
         let worker: ProviderWorker = Box::pin(Self::run_stream_worker(
-            self.config.clone(),
+            self.config.provider_id.clone(),
+            self.client.clone(),
             request,
             event_tx,
             cancel_rx,
